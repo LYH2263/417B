@@ -10,6 +10,7 @@ try:
     from app.rewriter import rewrite_text
     from app.continuation import generate_continuations, generate_continuations_stream
     from app.rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
+    from app.summarizer import summarize_paper
 except ImportError:
     try:
         from .parser import extract_text
@@ -17,12 +18,14 @@ except ImportError:
         from .rewriter import rewrite_text
         from .continuation import generate_continuations, generate_continuations_stream
         from .rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
+        from .summarizer import summarize_paper
     except ImportError:
         from parser import extract_text
         from detector import detect_ai_content
         from rewriter import rewrite_text
         from continuation import generate_continuations, generate_continuations_stream
         from rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
+        from summarizer import summarize_paper
 
 app = FastAPI(title="Academic AIGC Helper API")
 
@@ -187,6 +190,70 @@ async def get_rating_statistics():
 async def get_rating_suggestions():
     suggestions = generate_suggestions()
     return {"suggestions": suggestions}
+
+MAX_TEXT_LENGTH = 20000
+
+@app.post("/api/summarize-text")
+async def summarize_text_endpoint(payload: TextPayload):
+    if not payload.text or not payload.text.strip():
+        raise HTTPException(status_code=400, detail="No text provided")
+    if len(payload.text.strip()) > MAX_TEXT_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Text exceeds maximum length of {MAX_TEXT_LENGTH} characters. Current length: {len(payload.text.strip())}"
+        )
+
+    summary_result = summarize_paper(payload.text, max_len=MAX_TEXT_LENGTH)
+
+    full_summary_text = "\n".join([
+        summary_result["structured_summary"].get("background", ""),
+        summary_result["structured_summary"].get("purpose", ""),
+        summary_result["structured_summary"].get("methods", ""),
+        summary_result["structured_summary"].get("results", ""),
+        summary_result["structured_summary"].get("conclusion", "")
+    ])
+
+    ai_detection = detect_ai_content(full_summary_text)
+
+    return {
+        **summary_result,
+        "summary_ai_detection": ai_detection
+    }
+
+@app.post("/api/summarize-file")
+async def summarize_file_endpoint(file: UploadFile = File(...)):
+    content = await file.read()
+    try:
+        text = extract_text(content, file.filename)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="Extracted text is empty")
+
+    if len(text.strip()) > MAX_TEXT_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Text exceeds maximum length of {MAX_TEXT_LENGTH} characters. Current length: {len(text.strip())}"
+        )
+
+    summary_result = summarize_paper(text, max_len=MAX_TEXT_LENGTH)
+
+    full_summary_text = "\n".join([
+        summary_result["structured_summary"].get("background", ""),
+        summary_result["structured_summary"].get("purpose", ""),
+        summary_result["structured_summary"].get("methods", ""),
+        summary_result["structured_summary"].get("results", ""),
+        summary_result["structured_summary"].get("conclusion", "")
+    ])
+
+    ai_detection = detect_ai_content(full_summary_text)
+
+    return {
+        "filename": file.filename,
+        **summary_result,
+        "summary_ai_detection": ai_detection
+    }
 
 if __name__ == "__main__":
     import uvicorn

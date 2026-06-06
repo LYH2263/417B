@@ -2,7 +2,8 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw,
   CheckCircle, FileDown, Layers, Wand2, ArrowRightLeft, ListEnd, BarChart3,
-  Check, RotateCcw, PenLine, Loader2, Copy, ThumbsUp, Feather, Lightbulb
+  Check, RotateCcw, PenLine, Loader2, Copy, ThumbsUp, Feather, Lightbulb,
+  ChevronDown, FileSearch, Highlighter, AlignJustify, BookOpen
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -41,6 +42,19 @@ function App() {
   const [externalSuggestions, setExternalSuggestions] = useState([]);
   const [toastMsg, setToastMsg] = useState("");
 
+  const [sumText, setSumText] = useState("");
+  const [sumFile, setSumFile] = useState(null);
+  const [sumLoading, setSumLoading] = useState(false);
+  const [sumResult, setSumResult] = useState(null);
+  const [sumExpanded, setSumExpanded] = useState({
+    background: true,
+    purpose: true,
+    methods: true,
+    results: true,
+    conclusion: true
+  });
+  const [sumEditable, setSumEditable] = useState(null);
+
   const scrollToInput = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -51,6 +65,10 @@ function App() {
     setText("");
     setFile(null);
     setContCandidates([]);
+    setSumResult(null);
+    setSumText("");
+    setSumFile(null);
+    setSumEditable(null);
     scrollToInput();
   };
 
@@ -63,6 +81,144 @@ function App() {
   const handleBatchClick = () => {
     alert("批量处理功能正在内测中。如需大批量处理，请通过 API 接入或联系学术客服。");
   };
+
+  const MAX_SUM_LENGTH = 20000;
+
+  const handleSummarizeFileUpload = async (e) => {
+    const selectedFile = e.target.files[0];
+    if (!selectedFile) return;
+
+    if (quota <= 0) {
+      alert("今日额度已用完，请明天再试或升级账户。");
+      return;
+    }
+
+    setSumLoading(true);
+    setSumResult(null);
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+      const response = await axios.post(`${API_BASE}/summarize-file`, formData);
+      setSumResult(response.data);
+      if (response.data.original_text) setSumText(response.data.original_text);
+      setSumEditable({ ...response.data.structured_summary });
+      decreaseQuota();
+      setTimeout(() => document.getElementById('summary-results-section')?.scrollIntoView({ behavior: 'smooth' }), 300);
+    } catch (err) {
+      alert("智能摘要失败: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setSumLoading(false);
+    }
+  };
+
+  const handleSummarizeText = async () => {
+    if (!sumText.trim()) return;
+
+    if (sumText.trim().length > MAX_SUM_LENGTH) {
+      alert(`输入文本超出字数限制（${MAX_SUM_LENGTH}字），当前 ${sumText.trim().length} 字。请精简后重试。`);
+      return;
+    }
+
+    if (quota <= 0) {
+      alert("今日额度已用完，请明天再试或升级账户。");
+      return;
+    }
+
+    setSumLoading(true);
+    setSumResult(null);
+    try {
+      const response = await axios.post(`${API_BASE}/summarize-text`, { text: sumText });
+      setSumResult(response.data);
+      setSumEditable({ ...response.data.structured_summary });
+      decreaseQuota();
+      setTimeout(() => document.getElementById('summary-results-section')?.scrollIntoView({ behavior: 'smooth' }), 300);
+    } catch (err) {
+      alert("智能摘要失败: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setSumLoading(false);
+    }
+  };
+
+  const toggleSection = (key) => {
+    setSumExpanded(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleSummaryEdit = (key, value) => {
+    setSumEditable(prev => ({ ...prev, [key]: value }));
+  };
+
+  const handleCopyFullSummary = () => {
+    if (!sumEditable) return;
+    const labels = {
+      background: "【研究背景】",
+      purpose: "【研究目的】",
+      methods: "【研究方法】",
+      results: "【研究结果】",
+      conclusion: "【研究结论】"
+    };
+    const text = Object.entries(sumEditable)
+      .map(([k, v]) => `${labels[k] || k}\n${v}`)
+      .join("\n\n");
+    navigator.clipboard.writeText(text);
+    setToastMsg("摘要已复制到剪贴板");
+  };
+
+  const renderHighlightedText = (text, keySentences) => {
+    if (!keySentences || keySentences.length === 0) {
+      return <span>{text}</span>;
+    }
+
+    const sorted = [...keySentences].sort((a, b) => a.start - b.start);
+    const segments = [];
+    let lastEnd = 0;
+
+    sorted.forEach((ks, idx) => {
+      if (ks.start > lastEnd) {
+        segments.push({
+          type: 'normal',
+          text: text.slice(lastEnd, ks.start)
+        });
+      }
+      segments.push({
+        type: 'highlight',
+        text: ks.text,
+        score: ks.score,
+        idx: idx
+      });
+      lastEnd = ks.start + ks.text.length;
+    });
+
+    if (lastEnd < text.length) {
+      segments.push({
+        type: 'normal',
+        text: text.slice(lastEnd)
+      });
+    }
+
+    return segments.map((seg, i) => {
+      if (seg.type === 'highlight') {
+        return (
+          <mark
+            key={i}
+            className="bg-amber-400/30 text-amber-200 border-b border-amber-400/60 rounded px-0.5"
+            title={`关键句 #${seg.idx + 1} · TextRank 分数: ${seg.score}`}
+          >
+            {seg.text}
+          </mark>
+        );
+      }
+      return <span key={i}>{seg.text}</span>;
+    });
+  };
+
+  const SUMMARY_SECTIONS = [
+    { key: "background", label: "研究背景", icon: BookOpen, color: "from-sky-500 to-blue-500" },
+    { key: "purpose", label: "研究目的", icon: Lightbulb, color: "from-amber-500 to-orange-500" },
+    { key: "methods", label: "研究方法", icon: Layers, color: "from-emerald-500 to-teal-500" },
+    { key: "results", label: "研究结果", icon: BarChart3, color: "from-purple-500 to-fuchsia-500" },
+    { key: "conclusion", label: "研究结论", icon: CheckCircle, color: "from-rose-500 to-pink-500" }
+  ];
 
   const handleRatingSuggestions = (suggestions) => {
     setExternalSuggestions(suggestions);
@@ -339,6 +495,13 @@ function App() {
             >
               <PenLine className="w-4 h-4" />
               智能续写
+            </button>
+            <button
+              onClick={() => setActiveTab("summary")}
+              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${activeTab === "summary" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20" : "text-slate-500 hover:text-slate-300"}`}
+            >
+              <AlignJustify className="w-4 h-4" />
+              智能摘要
             </button>
           </div>
         </div>
@@ -764,6 +927,248 @@ function App() {
                     <h3 className="text-slate-400 font-bold mb-2">选择续写方向，输入论文段落</h3>
                     <p className="text-sm text-slate-600 max-w-md mx-auto">
                       系统将基于上下文智能生成 3 条风格各异的续写方案，每条包含 AI 率预估与语气标签，供您择优采纳。
+                    </p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === "summary" && (
+            <motion.div
+              key="summary"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.2 }}
+            >
+              <div className="space-y-6">
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden">
+                  <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-orange-500/5 pointer-events-none"></div>
+
+                  <div className="relative">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <AlignJustify className="w-5 h-5 text-amber-400" />
+                        <h2 className="text-lg font-bold text-white">智能摘要工作台</h2>
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        当前字数: <span className={sumText.length > MAX_SUM_LENGTH ? "text-red-400 font-bold" : sumText.length > MAX_SUM_LENGTH * 0.9 ? "text-amber-400" : "text-slate-300"}>{sumText.length}</span> / {MAX_SUM_LENGTH}
+                        {sumText.length > MAX_SUM_LENGTH && <span className="ml-2 text-red-400">（已超限）</span>}
+                      </div>
+                    </div>
+
+                    <div className="mb-4 flex gap-2">
+                      <button className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-medium border border-slate-700">文本模式</button>
+                      <div className="relative group">
+                        <button
+                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${sumLoading ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
+                          disabled={sumLoading}
+                        >
+                          {sumLoading ? (
+                            <>
+                              <RefreshCcw className="w-4 h-4 animate-spin" />
+                              上传中...
+                            </>
+                          ) : (
+                            <>
+                              <Upload className="w-4 h-4" />
+                              上传文件
+                            </>
+                          )}
+                        </button>
+                        <input
+                          type="file"
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          onChange={handleSummarizeFileUpload}
+                          accept=".pdf,.docx,.txt"
+                          disabled={sumLoading}
+                        />
+                      </div>
+                    </div>
+
+                    <textarea
+                      className="w-full bg-slate-950/80 border border-slate-800 rounded-2xl p-5 text-slate-300 focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none min-h-[280px] transition-all text-sm leading-relaxed resize-y"
+                      placeholder="在此粘贴论文全文，或上传 PDF/DOCX/TXT 文件。系统将自动提取关键句并生成结构化摘要（背景/目的/方法/结果/结论）。最长支持 20000 字。"
+                      value={sumText}
+                      onChange={(e) => setSumText(e.target.value)}
+                    ></textarea>
+
+                    <div className="flex items-center justify-between mt-4">
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <FileSearch className="w-4 h-4" />
+                        <span>基于 TextRank 关键句提取 + Groq LLM 结构化摘要生成</span>
+                      </div>
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => {
+                            setSumText("");
+                            setSumResult(null);
+                            setSumEditable(null);
+                          }}
+                          className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl text-sm font-bold transition-all border border-slate-700"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          清空
+                        </button>
+                        <button
+                          onClick={handleSummarizeText}
+                          disabled={sumLoading || !sumText.trim() || sumText.trim().length > MAX_SUM_LENGTH}
+                          className="flex items-center gap-2 px-7 py-2.5 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-sm font-bold transition-all shadow-xl shadow-amber-500/20"
+                        >
+                          {sumLoading ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              生成中...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-4 h-4" />
+                              生成智能摘要
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {sumResult && sumEditable && (
+                  <motion.div
+                    id="summary-results-section"
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="space-y-6"
+                  >
+                    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 relative overflow-hidden">
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                        <div>
+                          <h3 className="text-xl font-bold text-white mb-1 flex items-center gap-2">
+                            <Highlighter className="w-5 h-5 text-amber-400" />
+                            关键句提取结果
+                          </h3>
+                          <p className="text-slate-400 text-sm">
+                            基于 TextRank + PageRank 迭代算法，共提取 {sumResult.key_sentences?.length || 0} 句核心论点
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-6">
+                          <div className="text-center">
+                            <p className="text-xs text-slate-500 uppercase font-bold mb-1">摘要 AI 率</p>
+                            <p className={`text-3xl font-black ${sumResult.summary_ai_detection?.overall_ai_score > 50 ? 'text-red-400' : 'text-emerald-400'}`}>
+                              {sumResult.summary_ai_detection?.overall_ai_score}%
+                            </p>
+                          </div>
+                          <button
+                            onClick={handleCopyFullSummary}
+                            className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-bold transition-all shadow-lg shadow-indigo-500/20"
+                          >
+                            <Copy className="w-4 h-4" />
+                            一键复制摘要
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mt-6 p-5 bg-slate-950/70 border border-slate-800 rounded-2xl max-h-[400px] overflow-y-auto">
+                        <p className="text-sm leading-loose text-slate-300 whitespace-pre-wrap">
+                          {renderHighlightedText(sumResult.original_text || sumText, sumResult.key_sentences)}
+                        </p>
+                      </div>
+
+                      {sumResult.key_sentences && sumResult.key_sentences.length > 0 && (
+                        <div className="mt-4 space-y-2">
+                          <p className="text-xs text-slate-500 uppercase font-bold tracking-wider">提取的关键句列表</p>
+                          <div className="grid grid-cols-1 gap-2">
+                            {sumResult.key_sentences.map((ks, i) => (
+                              <div key={i} className="flex items-start gap-3 p-3 bg-amber-500/5 border border-amber-500/20 rounded-xl">
+                                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm text-slate-300 leading-relaxed">{ks.text}</p>
+                                  <p className="text-[10px] text-slate-600 mt-1">TextRank 权重: {ks.score}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6">
+                      <div className="flex items-center justify-between mb-5">
+                        <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                          <FileText className="w-5 h-5 text-indigo-400" />
+                          结构化摘要 · 可编辑
+                        </h3>
+                        <div className="text-xs text-slate-500">点击各部分标题可折叠/展开</div>
+                      </div>
+
+                      <div className="space-y-3">
+                        {SUMMARY_SECTIONS.map((sec, idx) => {
+                          const Icon = sec.icon;
+                          const isExpanded = sumExpanded[sec.key];
+                          return (
+                            <motion.div
+                              key={sec.key}
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ delay: idx * 0.05 }}
+                              className={`border rounded-2xl overflow-hidden transition-colors ${isExpanded ? 'border-slate-700 bg-slate-900/50' : 'border-slate-800'}`}
+                            >
+                              <button
+                                onClick={() => toggleSection(sec.key)}
+                                className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-slate-800/50 transition-colors"
+                              >
+                                <div className={`w-8 h-8 rounded-xl flex items-center justify-center bg-gradient-to-br ${sec.color} shadow-lg`}>
+                                  <Icon className="w-4 h-4 text-white" />
+                                </div>
+                                <span className="font-bold text-white">{sec.label}</span>
+                                <div className="ml-auto flex items-center gap-3">
+                                  {!isExpanded && (
+                                    <span className="text-xs text-slate-500 line-clamp-1 max-w-[280px] text-right">
+                                      {sumEditable[sec.key]}
+                                    </span>
+                                  )}
+                                  <motion.div animate={{ rotate: isExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
+                                    <ChevronDown className="w-4 h-4 text-slate-500" />
+                                  </motion.div>
+                                </div>
+                              </button>
+
+                              <AnimatePresence>
+                                {isExpanded && (
+                                  <motion.div
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: "auto", opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="overflow-hidden"
+                                  >
+                                    <div className="px-5 pb-5">
+                                      <textarea
+                                        value={sumEditable[sec.key] || ""}
+                                        onChange={(e) => handleSummaryEdit(sec.key, e.target.value)}
+                                        className="w-full bg-slate-950/80 border border-slate-800 rounded-xl p-4 text-sm leading-relaxed text-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none min-h-[100px] resize-y transition-all"
+                                        placeholder={`在此编辑${sec.label}内容...`}
+                                      ></textarea>
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </motion.div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {!sumResult && !sumLoading && (
+                  <div className="bg-slate-900/50 border border-dashed border-slate-800 rounded-3xl p-12 text-center">
+                    <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-slate-800 flex items-center justify-center">
+                      <AlignJustify className="w-8 h-8 text-slate-600" />
+                    </div>
+                    <h3 className="text-slate-400 font-bold mb-2">粘贴论文或上传文件，一键生成结构化摘要</h3>
+                    <p className="text-sm text-slate-600 max-w-md mx-auto">
+                      系统将基于 TextRank 算法提取关键句，调用大模型生成包含研究背景、目的、方法、结果、结论五部分的结构化摘要，并检测 AI 生成率。
                     </p>
                   </div>
                 )}
