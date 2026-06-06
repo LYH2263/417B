@@ -1,8 +1,6 @@
-@import "tailwindcss";
-
-@theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 :root {
   color-scheme: dark;
@@ -18,4 +16,5 @@ body {
   margin: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
 }

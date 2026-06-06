@@ -4,13 +4,14 @@ import {
   CheckCircle, FileDown, Layers, Wand2, ArrowRightLeft, ListEnd, BarChart3,
   Check, RotateCcw, PenLine, Loader2, Copy, ThumbsUp, Feather, Lightbulb,
   ChevronDown, FileSearch, Highlighter, AlignJustify, BookOpen,
-  Gauge, Target, AlertTriangle, Info, TrendingUp, Award, Type, Hash
+  Gauge, Target, AlertTriangle, Info, TrendingUp, Award, Type, Hash, Users
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import RatingPanel from './components/RatingPanel';
 import RatingStatistics from './components/RatingStatistics';
 import SuggestionBanner from './components/SuggestionBanner';
+import CollabEditor from './components/CollabEditor';
 
 const API_BASE = "http://localhost:8417/api";
 
@@ -22,7 +23,19 @@ const DIRECTIONS = [
 ];
 
 function App() {
-  const [activeTab, setActiveTab] = useState("detect");
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.hash.includes('room=')) {
+      return "collab";
+    }
+    return "detect";
+  });
+  const [initialRoomId, setInitialRoomId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const match = window.location.hash.match(/room=([a-zA-Z0-9]+)/);
+      return match ? match[1] : '';
+    }
+    return '';
+  });
   const [file, setFile] = useState(null);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -661,6 +674,13 @@ function App() {
               <Gauge className="w-4 h-4" />
               风格诊断
             </button>
+            <button
+              onClick={() => setActiveTab("collab")}
+              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${activeTab === "collab" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20" : "text-slate-500 hover:text-slate-300"}`}
+            >
+              <Users className="w-4 h-4" />
+              实时协作
+            </button>
           </div>
         </div>
 
@@ -816,47 +836,49 @@ function App() {
                       </div>
 
                       {rewriteResult && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <div className="bg-slate-900/50 border border-slate-800 rounded-3xl p-6 backdrop-blur">
-                            <h3 className="text-sm font-bold text-slate-500 mb-4 flex items-center gap-2">
-                              <FileText className="w-4 h-4" /> 原文
-                            </h3>
-                            <div className="text-sm leading-relaxed text-slate-400 h-[400px] overflow-y-auto pr-4">
-                              {text}
-                            </div>
-                          </div>
-                          <div className="bg-slate-900 border border-indigo-500/30 rounded-3xl p-6 shadow-2xl shadow-indigo-500/5">
-                            <div className="flex items-center justify-between mb-4">
-                              <h3 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
-                                <Sparkles className="w-4 h-4" /> 人性化改写文
+                        <>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="bg-slate-900/50 border border-slate-800 rounded-3xl p-6 backdrop-blur">
+                              <h3 className="text-sm font-bold text-slate-500 mb-4 flex items-center gap-2">
+                                <FileText className="w-4 h-4" /> 原文
                               </h3>
-                              <button
-                                onClick={() => {
-                                  const blob = new Blob([rewriteResult.rewritten_text], { type: 'text/plain' });
-                                  const url = URL.createObjectURL(blob);
-                                  const a = document.createElement('a');
-                                  a.href = url;
-                                  a.download = 'rewritten_paper.txt';
-                                  a.click();
-                                }}
-                                className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors"
-                              >
-                                <FileDown className="w-3 h-3" /> 导出 TXT
-                              </button>
+                              <div className="text-sm leading-relaxed text-slate-400 h-[400px] overflow-y-auto pr-4">
+                                {text}
+                              </div>
                             </div>
-                            <div className="text-sm leading-relaxed text-white h-[400px] overflow-y-auto pr-4 font-medium">
-                              {rewriteResult.rewritten_text}
+                            <div className="bg-slate-900 border border-indigo-500/30 rounded-3xl p-6 shadow-2xl shadow-indigo-500/5">
+                              <div className="flex items-center justify-between mb-4">
+                                <h3 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
+                                  <Sparkles className="w-4 h-4" /> 人性化改写文
+                                </h3>
+                                <button
+                                  onClick={() => {
+                                    const blob = new Blob([rewriteResult.rewritten_text], { type: 'text/plain' });
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = 'rewritten_paper.txt';
+                                    a.click();
+                                  }}
+                                  className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors"
+                                >
+                                  <FileDown className="w-3 h-3" /> 导出 TXT
+                                </button>
+                              </div>
+                              <div className="text-sm leading-relaxed text-white h-[400px] overflow-y-auto pr-4 font-medium">
+                                {rewriteResult.rewritten_text}
+                              </div>
                             </div>
                           </div>
-                        </div>
 
-                        <RatingPanel
-                          key={ratingRefreshKey + '-' + (rewriteResult?.rewritten_text?.length || 0)}
-                          rewriteResult={rewriteResult}
-                          rewriteLevel={rewriteLevel}
-                          originalText={text}
-                          onSuggestions={handleRatingSuggestions}
-                        />
+                          <RatingPanel
+                            key={ratingRefreshKey + '-' + (rewriteResult?.rewritten_text?.length || 0)}
+                            rewriteResult={rewriteResult}
+                            rewriteLevel={rewriteLevel}
+                            originalText={text}
+                            onSuggestions={handleRatingSuggestions}
+                          />
+                        </>
                       )}
 
                       {!rewriteResult && result?.details && (
@@ -1669,6 +1691,27 @@ function App() {
                   </div>
                 )}
               </div>
+            </motion.div>
+          )}
+
+          {activeTab === "collab" && (
+            <motion.div
+              key="collab"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.2 }}
+            >
+              <CollabEditor
+                initialRoomId={initialRoomId}
+                onRoomChange={(id) => {
+                  if (id) {
+                    window.location.hash = `room=${id}`;
+                  } else {
+                    window.location.hash = '';
+                  }
+                }}
+              />
             </motion.div>
           )}
         </AnimatePresence>

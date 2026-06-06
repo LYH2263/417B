@@ -1,34 +1,65 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
+import asyncio
+import json
 
 try:
     from app.parser import extract_text
-    from app.detector import detect_ai_content
-    from app.rewriter import rewrite_text
-    from app.continuation import generate_continuations, generate_continuations_stream
     from app.rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
     from app.summarizer import summarize_paper
-    from app.style_analyzer import analyze_writing_style
+    from app.collab import room_manager
 except ImportError:
     try:
         from .parser import extract_text
-        from .detector import detect_ai_content
-        from .rewriter import rewrite_text
-        from .continuation import generate_continuations, generate_continuations_stream
         from .rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
         from .summarizer import summarize_paper
-        from .style_analyzer import analyze_writing_style
+        from .collab import room_manager
     except ImportError:
         from parser import extract_text
-        from detector import detect_ai_content
-        from rewriter import rewrite_text
-        from continuation import generate_continuations, generate_continuations_stream
         from rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
         from summarizer import summarize_paper
-        from style_analyzer import analyze_writing_style
+        from collab import room_manager
+
+def _lazy_import(name):
+    if name == "detect_ai_content":
+        try:
+            from app.detector import detect_ai_content
+        except ImportError:
+            try:
+                from .detector import detect_ai_content
+            except ImportError:
+                from detector import detect_ai_content
+        return detect_ai_content
+    if name == "rewrite_text":
+        try:
+            from app.rewriter import rewrite_text
+        except ImportError:
+            try:
+                from .rewriter import rewrite_text
+            except ImportError:
+                from rewriter import rewrite_text
+        return rewrite_text
+    if name == "continuation":
+        try:
+            from app.continuation import generate_continuations, generate_continuations_stream
+        except ImportError:
+            try:
+                from .continuation import generate_continuations, generate_continuations_stream
+            except ImportError:
+                from continuation import generate_continuations, generate_continuations_stream
+        return generate_continuations, generate_continuations_stream
+    if name == "style_analyzer":
+        try:
+            from app.style_analyzer import analyze_writing_style
+        except ImportError:
+            try:
+                from .style_analyzer import analyze_writing_style
+            except ImportError:
+                from style_analyzer import analyze_writing_style
+        return analyze_writing_style
 
 app = FastAPI(title="Academic AIGC Helper API")
 
@@ -60,7 +91,8 @@ class StyleAnalysisPayload(BaseModel):
 async def rewrite(payload: RewritePayload):
     if not payload.text:
         raise HTTPException(status_code=400, detail="No text provided")
-    
+    detect_ai_content = _lazy_import("detect_ai_content")
+    rewrite_text = _lazy_import("rewrite_text")
     current_text = payload.text
     max_retries = 3
     detection_after = None
@@ -88,6 +120,7 @@ async def root():
 async def detect_text(payload: TextPayload):
     if not payload.text:
         raise HTTPException(status_code=400, detail="No text provided")
+    detect_ai_content = _lazy_import("detect_ai_content")
     result = detect_ai_content(payload.text)
     return result
 
@@ -98,7 +131,7 @@ async def detect_file(file: UploadFile = File(...)):
         text = extract_text(content, file.filename)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
+    detect_ai_content = _lazy_import("detect_ai_content")
     result = detect_ai_content(text)
     return {
         "filename": file.filename,
@@ -121,6 +154,8 @@ async def create_continuation(payload: ContinuationPayload):
     if len(context) > 1000:
         context = context[-1000:]
 
+    generate_continuations, _ = _lazy_import("continuation")
+    detect_ai_content = _lazy_import("detect_ai_content")
     candidates = generate_continuations(context, payload.direction)
 
     for cand in candidates:
@@ -147,6 +182,9 @@ async def create_continuation_stream(payload: ContinuationPayload):
     context = payload.text
     if len(context) > 1000:
         context = context[-1000:]
+
+    _, generate_continuations_stream = _lazy_import("continuation")
+    detect_ai_content = _lazy_import("detect_ai_content")
 
     async def event_generator():
         final_candidates = {}
@@ -220,6 +258,7 @@ async def summarize_text_endpoint(payload: TextPayload):
         summary_result["structured_summary"].get("conclusion", "")
     ])
 
+    detect_ai_content = _lazy_import("detect_ai_content")
     ai_detection = detect_ai_content(full_summary_text)
 
     return {
@@ -254,6 +293,7 @@ async def summarize_file_endpoint(file: UploadFile = File(...)):
         summary_result["structured_summary"].get("conclusion", "")
     ])
 
+    detect_ai_content = _lazy_import("detect_ai_content")
     ai_detection = detect_ai_content(full_summary_text)
 
     return {
@@ -261,10 +301,6 @@ async def summarize_file_endpoint(file: UploadFile = File(...)):
         **summary_result,
         "summary_ai_detection": ai_detection
     }
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8417)
 
 MAX_STYLE_LENGTH = 30000
 
@@ -283,5 +319,232 @@ async def style_analyze_endpoint(payload: StyleAnalysisPayload):
             status_code=400,
             detail=f"Invalid journal_level. Must be one of: {valid_levels}"
         )
+    analyze_writing_style = _lazy_import("style_analyzer")
     result = analyze_writing_style(payload.text, payload.journal_level)
     return result
+
+
+@app.on_event("startup")
+async def startup_event():
+    await room_manager.start()
+
+
+@app.post("/api/collab/rooms")
+async def create_collab_room():
+    room_id = room_manager.create_room()
+    return {"room_id": room_id, "share_url": f"/collab/{room_id}"}
+
+
+@app.get("/api/collab/rooms/{room_id}")
+async def get_room_info(room_id: str):
+    room = room_manager.get_room(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    return {
+        "room_id": room.room_id,
+        "user_count": len([u for u in room.users.values() if u.connected]),
+        "version": room.version,
+        "created_at": room.created_at
+    }
+
+
+@app.get("/api/collab/rooms/{room_id}/history")
+async def get_room_history(room_id: str, start_version: int = 0, end_version: Optional[int] = None):
+    room = room_manager.get_room(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    history = room.get_history_range(start_version, end_version)
+    return {"history": history, "current_version": room.version}
+
+
+class CollabDetectPayload(BaseModel):
+    room_id: str
+    user_id: str
+
+
+class CollabRewritePayload(BaseModel):
+    room_id: str
+    user_id: str
+    level: str = "medium"
+
+
+@app.post("/api/collab/detect")
+async def collab_detect(payload: CollabDetectPayload):
+    room = room_manager.get_room(payload.room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    detect_ai_content = _lazy_import("detect_ai_content")
+    result = detect_ai_content(room.text)
+    room.set_result("detection", result)
+    await room.broadcast({
+        "type": "result",
+        "result_type": "detection",
+        "data": result,
+        "triggered_by": payload.user_id
+    })
+    return result
+
+
+@app.post("/api/collab/rewrite")
+async def collab_rewrite(payload: CollabRewritePayload):
+    room = room_manager.get_room(payload.room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if not room.text.strip():
+        raise HTTPException(status_code=400, detail="No text to rewrite")
+
+    detect_ai_content = _lazy_import("detect_ai_content")
+    rewrite_text = _lazy_import("rewrite_text")
+    current_text = room.text
+    max_retries = 3
+    detection_after = None
+
+    for i in range(max_retries):
+        current_text = rewrite_text(current_text, payload.level)
+        detection_after = detect_ai_content(current_text)
+        if detection_after["overall_ai_score"] < 10:
+            break
+
+    rewrite_result = {
+        "original_text": room.text,
+        "rewritten_text": current_text,
+        "detection_after": detection_after,
+        "iterations": i + 1
+    }
+
+    import uuid as _uuid
+    op_id = str(_uuid.uuid4())
+    delete_op = {"type": "delete", "position": 0, "length": len(room.text)}
+    insert_op = {"type": "insert", "position": 0, "text": current_text}
+
+    async with room.lock:
+        v1 = room.apply_op(payload.user_id, {**delete_op, "op_id": op_id + "_d"}, room.version)
+        v2 = room.apply_op(payload.user_id, {**insert_op, "op_id": op_id + "_i"}, room.version)
+
+    room.set_result("rewrite", rewrite_result)
+
+    await room.broadcast({
+        "type": "op",
+        "version": v1["version"],
+        "op": v1,
+        "user_id": payload.user_id
+    })
+    await room.broadcast({
+        "type": "op",
+        "version": v2["version"],
+        "op": v2,
+        "user_id": payload.user_id
+    })
+    await room.broadcast({
+        "type": "result",
+        "result_type": "rewrite",
+        "data": rewrite_result,
+        "triggered_by": payload.user_id
+    })
+
+    return rewrite_result
+
+
+@app.websocket("/ws/collab/{room_id}/{user_id}")
+async def websocket_collab(websocket: WebSocket, room_id: str, user_id: str):
+    await websocket.accept()
+    room = room_manager.get_or_create_room(room_id)
+
+    user_name = None
+    try:
+        first_msg = await websocket.receive_text()
+        try:
+            init_data = json.loads(first_msg)
+            if init_data.get("type") == "init":
+                user_name = init_data.get("name")
+        except Exception:
+            pass
+
+        async with room.lock:
+            user = room.add_user(user_id, user_name)
+            room.connections[user_id] = websocket
+
+        await websocket.send_text(json.dumps({
+            "type": "welcome",
+            "room_id": room_id,
+            "user_id": user_id,
+            "user": {
+                "user_id": user.user_id,
+                "name": user.name,
+                "avatar": user.avatar,
+                "color": user.color
+            },
+            "snapshot": room.get_snapshot()
+        }, ensure_ascii=False))
+
+        await room.broadcast({
+            "type": "user_join",
+            "user": {
+                "user_id": user.user_id,
+                "name": user.name,
+                "avatar": user.avatar,
+                "color": user.color,
+                "cursor": None
+            }
+        }, exclude=user_id)
+
+        while True:
+            try:
+                data = await websocket.receive_text()
+                msg = json.loads(data)
+                msg_type = msg.get("type")
+
+                async with room.lock:
+                    if msg_type == "op":
+                        op = msg.get("op", {})
+                        base_version = msg.get("base_version", 0)
+                        applied = room.apply_op(user_id, op, base_version)
+                        await room.broadcast({
+                            "type": "op",
+                            "version": applied["version"],
+                            "op": applied,
+                            "user_id": user_id
+                        })
+                    elif msg_type == "cursor":
+                        cursor = msg.get("cursor")
+                        room.set_cursor(user_id, cursor)
+                        await room.broadcast({
+                            "type": "cursor",
+                            "user_id": user_id,
+                            "cursor": cursor
+                        }, exclude=user_id)
+                    elif msg_type == "ping":
+                        room.touch()
+                        await websocket.send_text(json.dumps({"type": "pong", "timestamp": msg.get("timestamp")}))
+                    elif msg_type == "get_snapshot":
+                        await websocket.send_text(json.dumps({
+                            "type": "snapshot",
+                            "data": room.get_snapshot()
+                        }, ensure_ascii=False))
+                    elif msg_type == "get_history":
+                        start_v = msg.get("start_version", 0)
+                        end_v = msg.get("end_version")
+                        history = room.get_history_range(start_v, end_v)
+                        await websocket.send_text(json.dumps({
+                            "type": "history",
+                            "history": history,
+                            "current_version": room.version
+                        }, ensure_ascii=False))
+
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
+
+    finally:
+        async with room.lock:
+            room.connections.pop(user_id, None)
+            room.remove_user(user_id)
+        await room.broadcast({
+            "type": "user_leave",
+            "user_id": user_id
+        })
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8417)
