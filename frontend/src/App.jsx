@@ -1,11 +1,14 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw,
   CheckCircle, FileDown, Layers, Wand2, ArrowRightLeft, ListEnd, BarChart3,
-  Check, RotateCcw, PenLine, Loader2, Copy, ThumbsUp, Feather
+  Check, RotateCcw, PenLine, Loader2, Copy, ThumbsUp, Feather, Lightbulb
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
+import RatingPanel from './components/RatingPanel';
+import RatingStatistics from './components/RatingStatistics';
+import SuggestionBanner from './components/SuggestionBanner';
 
 const API_BASE = "http://localhost:8417/api";
 
@@ -34,6 +37,10 @@ function App() {
   const [contGeneration, setContGeneration] = useState(0);
   const abortRef = useRef(null);
 
+  const [ratingRefreshKey, setRatingRefreshKey] = useState(0);
+  const [externalSuggestions, setExternalSuggestions] = useState([]);
+  const [toastMsg, setToastMsg] = useState("");
+
   const scrollToInput = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -56,6 +63,28 @@ function App() {
   const handleBatchClick = () => {
     alert("批量处理功能正在内测中。如需大批量处理，请通过 API 接入或联系学术客服。");
   };
+
+  const handleRatingSuggestions = (suggestions) => {
+    setExternalSuggestions(suggestions);
+    setRatingRefreshKey(prev => prev + 1);
+  };
+
+  const handleApplySuggestion = (suggestion) => {
+    if (suggestion.dimension === 'ai_reduction') {
+      setRewriteLevel('high');
+      setToastMsg('已自动切换到深度改写模式');
+    } else {
+      setToastMsg(`已启用：${suggestion.action}`);
+    }
+    setExternalSuggestions(prev => prev.filter(s => s.dimension !== suggestion.dimension));
+    setTimeout(() => setToastMsg(""), 3000);
+  };
+
+  useEffect(() => {
+    if (!toastMsg) return;
+    const t = setTimeout(() => setToastMsg(""), 3000);
+    return () => clearTimeout(t);
+  }, [toastMsg]);
 
   const handleFileUpload = async (e) => {
     const selectedFile = e.target.files[0];
@@ -268,6 +297,12 @@ function App() {
       </nav>
 
       <main className="max-w-6xl mx-auto px-4 py-8">
+        <SuggestionBanner
+          externalSuggestions={externalSuggestions}
+          onApply={handleApplySuggestion}
+          refreshTrigger={ratingRefreshKey}
+        />
+
         <div className="text-center mb-8">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -283,6 +318,10 @@ function App() {
           <p className="text-base text-slate-400 max-w-2xl mx-auto">
             一站式学术论文工具：深度 AIGC 检测 + 多级人性化改写 + 智能续写。
           </p>
+        </div>
+
+        <div className="mb-10">
+          <RatingStatistics refreshTrigger={ratingRefreshKey} />
         </div>
 
         <div className="flex items-center justify-center mb-8">
@@ -489,6 +528,14 @@ function App() {
                             </div>
                           </div>
                         </div>
+
+                        <RatingPanel
+                          key={ratingRefreshKey + '-' + (rewriteResult?.rewritten_text?.length || 0)}
+                          rewriteResult={rewriteResult}
+                          rewriteLevel={rewriteLevel}
+                          originalText={text}
+                          onSuggestions={handleRatingSuggestions}
+                        />
                       )}
 
                       {!rewriteResult && result?.details && (
@@ -737,6 +784,20 @@ function App() {
           </div>
         </div>
       )}
+
+      <AnimatePresence>
+        {toastMsg && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 bg-emerald-600 text-white rounded-xl shadow-2xl shadow-emerald-500/30 text-sm font-bold flex items-center gap-2"
+          >
+            <Check className="w-4 h-4" />
+            {toastMsg}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <footer className="mt-12 border-t border-slate-800 py-8 text-center text-slate-500 text-sm">
         <p>© 2026 PaperWise AI. 专业级学术诚信守护者。</p>

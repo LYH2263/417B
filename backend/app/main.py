@@ -9,17 +9,20 @@ try:
     from app.detector import detect_ai_content
     from app.rewriter import rewrite_text
     from app.continuation import generate_continuations, generate_continuations_stream
+    from app.rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
 except ImportError:
     try:
         from .parser import extract_text
         from .detector import detect_ai_content
         from .rewriter import rewrite_text
         from .continuation import generate_continuations, generate_continuations_stream
+        from .rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
     except ImportError:
         from parser import extract_text
         from detector import detect_ai_content
         from rewriter import rewrite_text
         from continuation import generate_continuations, generate_continuations_stream
+        from rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
 
 app = FastAPI(title="Academic AIGC Helper API")
 
@@ -169,6 +172,21 @@ async def create_continuation_stream(payload: ContinuationPayload):
             "Access-Control-Allow-Origin": "*",
         }
     )
+
+@app.post("/api/ratings")
+async def create_rating(payload: RatingSubmit):
+    result = submit_rating(payload)
+    return result
+
+@app.get("/api/ratings/statistics")
+async def get_rating_statistics():
+    stats = get_statistics()
+    return stats
+
+@app.get("/api/ratings/suggestions")
+async def get_rating_suggestions():
+    suggestions = generate_suggestions()
+    return {"suggestions": suggestions}
 
 if __name__ == "__main__":
     import uvicorn
