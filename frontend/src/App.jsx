@@ -3,7 +3,8 @@ import {
   Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw,
   CheckCircle, FileDown, Layers, Wand2, ArrowRightLeft, ListEnd, BarChart3,
   Check, RotateCcw, PenLine, Loader2, Copy, ThumbsUp, Feather, Lightbulb,
-  ChevronDown, FileSearch, Highlighter, AlignJustify, BookOpen
+  ChevronDown, FileSearch, Highlighter, AlignJustify, BookOpen,
+  Gauge, Target, AlertTriangle, Info, TrendingUp, Award, Type, Hash
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -55,6 +56,13 @@ function App() {
   });
   const [sumEditable, setSumEditable] = useState(null);
 
+  const [styleText, setStyleText] = useState("");
+  const [styleLevel, setStyleLevel] = useState("sci_q2");
+  const [styleLoading, setStyleLoading] = useState(false);
+  const [styleResult, setStyleResult] = useState(null);
+  const [activeStyleHighlight, setActiveStyleHighlight] = useState(null);
+  const styleTextRef = useRef(null);
+
   const scrollToInput = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -69,6 +77,9 @@ function App() {
     setSumText("");
     setSumFile(null);
     setSumEditable(null);
+    setStyleResult(null);
+    setStyleText("");
+    setActiveStyleHighlight(null);
     scrollToInput();
   };
 
@@ -162,6 +173,146 @@ function App() {
       .join("\n\n");
     navigator.clipboard.writeText(text);
     setToastMsg("摘要已复制到剪贴板");
+  };
+
+  const MAX_STYLE_LENGTH = 30000;
+  const JOURNAL_LEVELS = [
+    { key: "sci_q1", label: "SCI 一区", desc: "顶刊标准，要求最严格" },
+    { key: "sci_q2", label: "SCI 二区", desc: "优质期刊，标准适中" },
+    { key: "sci_q3", label: "SCI 三区", desc: "标准期刊，相对宽松" }
+  ];
+
+  const STYLE_DIMENSIONS = [
+    { key: "sentence_length", label: "句子长度", icon: Type, color: "from-sky-500 to-blue-600" },
+    { key: "vocabulary", label: "词汇丰富度", icon: Hash, color: "from-emerald-500 to-teal-600" },
+    { key: "passive_voice", label: "被动语态", icon: Target, color: "from-amber-500 to-orange-600" },
+    { key: "connectors", label: "逻辑连接词", icon: TrendingUp, color: "from-purple-500 to-fuchsia-600" },
+    { key: "paragraphs", label: "段落结构", icon: Layers, color: "from-rose-500 to-pink-600" }
+  ];
+
+  const handleStyleAnalyze = async () => {
+    if (!styleText.trim()) return;
+    if (styleText.trim().length > MAX_STYLE_LENGTH) {
+      alert(`输入文本超出字数限制（${MAX_STYLE_LENGTH}字），当前 ${styleText.trim().length} 字。请精简后重试。`);
+      return;
+    }
+    if (quota <= 0) {
+      alert("今日额度已用完，请明天再试或升级账户。");
+      return;
+    }
+    setStyleLoading(true);
+    setStyleResult(null);
+    setActiveStyleHighlight(null);
+    try {
+      const response = await axios.post(`${API_BASE}/style-analyze`, {
+        text: styleText,
+        journal_level: styleLevel
+      });
+      setStyleResult(response.data);
+      decreaseQuota();
+      setTimeout(() => document.getElementById('style-results-section')?.scrollIntoView({ behavior: 'smooth' }), 300);
+    } catch (err) {
+      alert("写作风格诊断失败: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setStyleLoading(false);
+    }
+  };
+
+  const renderStyleHighlightedText = (text, suggestions, activeHighlight) => {
+    if (!suggestions || suggestions.length === 0) {
+      return <span>{text}</span>;
+    }
+    const relevant = suggestions.filter(s => s.start !== undefined && s.end !== undefined && s.start < s.end);
+    if (relevant.length === 0) {
+      return <span>{text}</span>;
+    }
+    const sorted = [...relevant].sort((a, b) => a.start - b.start);
+    const segments = [];
+    let lastEnd = 0;
+    sorted.forEach((sug, idx) => {
+      if (sug.start > lastEnd) {
+        segments.push({ type: 'normal', text: text.slice(lastEnd, sug.start) });
+      }
+      const isActive = activeHighlight && activeHighlight.start === sug.start && activeHighlight.end === sug.end;
+      const severityColors = {
+        high: 'bg-red-500/25 border-b-2 border-red-500 text-red-200',
+        medium: 'bg-amber-500/25 border-b-2 border-amber-500 text-amber-200',
+        low: 'bg-sky-500/20 border-b-2 border-sky-500 text-sky-200'
+      };
+      segments.push({
+        type: 'highlight',
+        text: text.slice(sug.start, sug.end),
+        suggestion: sug,
+        idx,
+        isActive,
+        className: severityColors[sug.severity] || severityColors.medium
+      });
+      lastEnd = sug.end;
+    });
+    if (lastEnd < text.length) {
+      segments.push({ type: 'normal', text: text.slice(lastEnd) });
+    }
+    return segments.map((seg, i) => {
+      if (seg.type === 'highlight') {
+        return (
+          <mark
+            key={i}
+            className={`${seg.className} cursor-pointer rounded px-0.5 transition-all ${seg.isActive ? 'ring-2 ring-offset-2 ring-offset-slate-950 ring-white scale-[1.02]' : ''}`}
+            title={`${seg.suggestion.title}`}
+            onClick={() => setActiveStyleHighlight(seg.suggestion)}
+          >
+            {seg.text}
+          </mark>
+        );
+      }
+      return <span key={i}>{seg.text}</span>;
+    });
+  };
+
+  const scrollToStylePosition = (suggestion) => {
+    if (!suggestion || suggestion.start === 0 && suggestion.end === 0) return;
+    setActiveStyleHighlight(suggestion);
+    if (styleTextRef.current) {
+      styleTextRef.current.scrollTop = 0;
+    }
+    setTimeout(() => {
+      const marks = styleTextRef.current?.querySelectorAll('mark');
+      if (marks && marks.length > 0) {
+        for (let m of marks) {
+          if (m.title === suggestion.title) {
+            m.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            break;
+          }
+        }
+      }
+    }, 100);
+  };
+
+  const ScoreGauge = ({ score, label, color, size = 120 }) => {
+    const radius = (size - 16) / 2;
+    const circumference = 2 * Math.PI * radius;
+    const progress = (score / 100) * circumference;
+    const strokeColor = score >= 80 ? '#10b981' : score >= 60 ? '#f59e0b' : '#ef4444';
+    return (
+      <div className="flex flex-col items-center">
+        <div className="relative" style={{ width: size, height: size }}>
+          <svg width={size} height={size} className="-rotate-90">
+            <circle cx={size / 2} cy={size / 2} r={radius} stroke="#1e293b" strokeWidth="10" fill="none" />
+            <circle
+              cx={size / 2} cy={size / 2} r={radius}
+              stroke={strokeColor} strokeWidth="10" fill="none"
+              strokeDasharray={`${progress} ${circumference}`}
+              strokeLinecap="round"
+              style={{ transition: 'stroke-dasharray 1s ease-out' }}
+            />
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-2xl font-black text-white">{score}</span>
+          </div>
+        </div>
+        <span className={`mt-2 text-xs font-bold bg-gradient-to-r ${color} bg-clip-text text-transparent`}>{label}</span>
+      </div>
+    );
   };
 
   const renderHighlightedText = (text, keySentences) => {
@@ -502,6 +653,13 @@ function App() {
             >
               <AlignJustify className="w-4 h-4" />
               智能摘要
+            </button>
+            <button
+              onClick={() => setActiveTab("style")}
+              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${activeTab === "style" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20" : "text-slate-500 hover:text-slate-300"}`}
+            >
+              <Gauge className="w-4 h-4" />
+              风格诊断
             </button>
           </div>
         </div>
@@ -1169,6 +1327,344 @@ function App() {
                     <h3 className="text-slate-400 font-bold mb-2">粘贴论文或上传文件，一键生成结构化摘要</h3>
                     <p className="text-sm text-slate-600 max-w-md mx-auto">
                       系统将基于 TextRank 算法提取关键句，调用大模型生成包含研究背景、目的、方法、结果、结论五部分的结构化摘要，并检测 AI 生成率。
+                    </p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === "style" && (
+            <motion.div
+              key="style"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.2 }}
+            >
+              <div className="space-y-6">
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden">
+                  <div className="absolute inset-0 bg-gradient-to-br from-sky-500/5 to-emerald-500/5 pointer-events-none"></div>
+
+                  <div className="relative">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <Gauge className="w-5 h-5 text-sky-400" />
+                        <h2 className="text-lg font-bold text-white">写作风格诊断工作台</h2>
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        当前字数: <span className={styleText.length > MAX_STYLE_LENGTH ? "text-red-400 font-bold" : styleText.length > MAX_STYLE_LENGTH * 0.9 ? "text-amber-400" : "text-slate-300"}>{styleText.length}</span> / {MAX_STYLE_LENGTH}
+                      </div>
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-3 block">目标期刊级别</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {JOURNAL_LEVELS.map(lvl => {
+                          const isActive = styleLevel === lvl.key;
+                          return (
+                            <button
+                              key={lvl.key}
+                              onClick={() => setStyleLevel(lvl.key)}
+                              className={`relative p-4 rounded-2xl border transition-all text-left overflow-hidden group ${isActive ? 'border-transparent bg-slate-800/50' : 'border-slate-800 hover:border-slate-700 bg-slate-950/30'}`}
+                            >
+                              {isActive && (
+                                <motion.div
+                                  layoutId="journal-active"
+                                  className="absolute inset-0 bg-gradient-to-br from-sky-500/20 to-emerald-500/20"
+                                  transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                                />
+                              )}
+                              <div className="relative">
+                                <div className="text-sm font-bold text-white mb-0.5">{lvl.label}</div>
+                                <div className="text-[11px] text-slate-500">{lvl.desc}</div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <textarea
+                      className="w-full bg-slate-950/80 border border-slate-800 rounded-2xl p-5 text-slate-300 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none min-h-[280px] transition-all text-sm leading-relaxed resize-y"
+                      placeholder="在此粘贴论文全文或段落，系统将从句子长度、词汇丰富度、被动语态使用、逻辑连接词、段落结构五个维度进行深度诊断，并与目标期刊标准做对比，给出具体改进建议。"
+                      value={styleText}
+                      onChange={(e) => setStyleText(e.target.value)}
+                    ></textarea>
+
+                    <div className="flex items-center justify-between mt-4">
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <Award className="w-4 h-4" />
+                        <span>基于学术写作计量语言学特征分析，覆盖 SCI Q1-Q3 期刊写作标准</span>
+                      </div>
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => {
+                            setStyleText("");
+                            setStyleResult(null);
+                            setActiveStyleHighlight(null);
+                          }}
+                          className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl text-sm font-bold transition-all border border-slate-700"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          清空
+                        </button>
+                        <button
+                          onClick={handleStyleAnalyze}
+                          disabled={styleLoading || !styleText.trim() || styleText.trim().length > MAX_STYLE_LENGTH}
+                          className="flex items-center gap-2 px-7 py-2.5 bg-gradient-to-r from-sky-600 to-emerald-600 hover:from-sky-500 hover:to-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-sm font-bold transition-all shadow-xl shadow-sky-500/20"
+                        >
+                          {styleLoading ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              诊断中...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-4 h-4" />
+                              开始风格诊断
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {styleResult && (
+                  <motion.div
+                    id="style-results-section"
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="space-y-6"
+                  >
+                    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 overflow-hidden relative">
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
+                        <div>
+                          <h2 className="text-2xl font-bold text-white mb-2 flex items-center gap-2">
+                            <Gauge className="w-6 h-6 text-sky-400" />
+                            风格诊断综合报告
+                          </h2>
+                          <p className="text-slate-400 text-sm">
+                            目标期刊级别: <span className="text-white font-bold">{JOURNAL_LEVELS.find(j => j.key === styleLevel)?.label}</span>
+                            &nbsp;·&nbsp; 共 {styleResult.analysis.vocabulary.total_words} 词 / {styleResult.analysis.sentence_length.sentences.length} 句 / {styleResult.analysis.paragraphs.count} 段
+                          </p>
+                        </div>
+                        <div className="text-center px-8 py-4 bg-slate-950/60 rounded-2xl border border-slate-800">
+                          <p className="text-xs text-slate-500 uppercase font-bold mb-1">综合风格得分</p>
+                          <p className={`text-4xl font-black ${styleResult.scores.overall >= 80 ? 'text-emerald-400' : styleResult.scores.overall >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
+                            {styleResult.scores.overall}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+                        {STYLE_DIMENSIONS.map((dim, idx) => {
+                          const Icon = dim.icon;
+                          const score = styleResult.scores[dim.key];
+                          return (
+                            <motion.div
+                              key={dim.key}
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ delay: idx * 0.08 }}
+                              className="p-4 bg-slate-950/50 border border-slate-800 rounded-2xl flex flex-col items-center"
+                            >
+                              <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${dim.color} flex items-center justify-center mb-2 shadow-lg`}>
+                                <Icon className="w-5 h-5 text-white" />
+                              </div>
+                              <ScoreGauge score={score} label={dim.label} color={dim.color} size={90} />
+                            </motion.div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                      <div className="lg:col-span-7 space-y-6">
+                        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6">
+                          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                            <Highlighter className="w-4 h-4 text-sky-400" />
+                            原文问题点标注 · 点击高亮查看详情
+                          </h3>
+                          <div
+                            ref={styleTextRef}
+                            className="p-5 bg-slate-950/70 border border-slate-800 rounded-2xl max-h-[500px] overflow-y-auto"
+                          >
+                            <p className="text-sm leading-loose text-slate-300 whitespace-pre-wrap">
+                              {renderStyleHighlightedText(styleResult.original_text, styleResult.suggestions, activeStyleHighlight)}
+                            </p>
+                          </div>
+                          <div className="mt-4 flex flex-wrap gap-4 text-xs text-slate-500">
+                            <div className="flex items-center gap-1.5">
+                              <span className="inline-block w-3 h-3 rounded bg-red-500/40 border-b-2 border-red-500"></span>
+                              高优先级
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="inline-block w-3 h-3 rounded bg-amber-500/40 border-b-2 border-amber-500"></span>
+                              中优先级
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="inline-block w-3 h-3 rounded bg-sky-500/30 border-b-2 border-sky-500"></span>
+                              低优先级
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+                            <h4 className="text-xs font-bold text-sky-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                              <Type className="w-3.5 h-3.5" /> 句子长度统计
+                            </h4>
+                            <div className="space-y-2 text-sm">
+                              <div className="flex justify-between"><span className="text-slate-500">平均句长</span><span className="text-white font-bold">{styleResult.analysis.sentence_length.avg} 词</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">标准差</span><span className="text-white font-bold">{styleResult.analysis.sentence_length.std}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">最短句</span><span className="text-white font-bold">{styleResult.analysis.sentence_length.min} 词</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">最长句</span><span className="text-white font-bold">{styleResult.analysis.sentence_length.max} 词</span></div>
+                              <div className="pt-2 mt-2 border-t border-slate-800">
+                                <p className="text-xs text-slate-500 mb-1.5">区间分布：</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {Object.entries(styleResult.analysis.sentence_length.distribution || {}).map(([k, v]) => (
+                                    <span key={k} className="text-[10px] px-2 py-0.5 bg-slate-800 text-slate-400 rounded-full">{k}: {v}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+                            <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                              <Hash className="w-3.5 h-3.5" /> 词汇丰富度
+                            </h4>
+                            <div className="space-y-2 text-sm">
+                              <div className="flex justify-between"><span className="text-slate-500">总词数</span><span className="text-white font-bold">{styleResult.analysis.vocabulary.total_words}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">独立词汇数</span><span className="text-white font-bold">{styleResult.analysis.vocabulary.unique_words}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">TTR (类符/形符比)</span><span className="text-white font-bold">{(styleResult.analysis.vocabulary.ttr * 100).toFixed(1)}%</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">Hapax 一次词比例</span><span className="text-white font-bold">{(styleResult.analysis.vocabulary.hapax_ratio * 100).toFixed(1)}%</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">一次词数量</span><span className="text-white font-bold">{styleResult.analysis.vocabulary.hapax_count}</span></div>
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+                            <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                              <Target className="w-3.5 h-3.5" /> 被动语态使用
+                            </h4>
+                            <div className="space-y-2 text-sm">
+                              <div className="flex justify-between"><span className="text-slate-500">被动句占比</span><span className="text-white font-bold">{(styleResult.analysis.passive_voice.passive_rate * 100).toFixed(1)}%</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">被动句数量</span><span className="text-white font-bold">{styleResult.analysis.passive_voice.passive_sentence_count} / {styleResult.analysis.passive_voice.total_sentences}</span></div>
+                              <div className="pt-2 mt-2 border-t border-slate-800">
+                                <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
+                                  <motion.div
+                                    initial={{ width: 0 }}
+                                    animate={{ width: `${styleResult.analysis.passive_voice.passive_rate * 100}%` }}
+                                    transition={{ duration: 0.8 }}
+                                    className="h-full bg-gradient-to-r from-amber-500 to-orange-500"
+                                  ></motion.div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+                            <h4 className="text-xs font-bold text-purple-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                              <TrendingUp className="w-3.5 h-3.5" /> 逻辑连接词 & 段落
+                            </h4>
+                            <div className="space-y-2 text-sm">
+                              <div className="flex justify-between"><span className="text-slate-500">连接词密度</span><span className="text-white font-bold">{(styleResult.analysis.connectors.density * 100).toFixed(2)}%</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">连接词总数</span><span className="text-white font-bold">{styleResult.analysis.connectors.total_count}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">段落数</span><span className="text-white font-bold">{styleResult.analysis.paragraphs.count}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">平均每段句数</span><span className="text-white font-bold">{styleResult.analysis.paragraphs.avg_sentences}</span></div>
+                              {styleResult.analysis.connectors.connector_counts && Object.keys(styleResult.analysis.connectors.connector_counts).length > 0 && (
+                                <div className="pt-2 mt-2 border-t border-slate-800">
+                                  <p className="text-xs text-slate-500 mb-1.5">高频连接词：</p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {Object.entries(styleResult.analysis.connectors.connector_counts).slice(0, 8).map(([k, v]) => (
+                                      <span key={k} className="text-[10px] px-2 py-0.5 bg-purple-500/10 text-purple-300 border border-purple-500/30 rounded-full">{k}: {v}</span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="lg:col-span-5">
+                        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sticky top-24">
+                          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                            <AlertTriangle className="w-4 h-4 text-amber-400" />
+                            具体改进建议 · {styleResult.suggestions.length} 条
+                          </h3>
+                          {styleResult.suggestions.length === 0 ? (
+                            <div className="p-8 text-center bg-slate-950/50 border border-slate-800 rounded-2xl">
+                              <CheckCircle className="w-10 h-10 text-emerald-500 mx-auto mb-3" />
+                              <p className="text-emerald-400 font-bold">太棒了！</p>
+                              <p className="text-sm text-slate-500 mt-1">未发现明显的风格问题，您的写作符合目标期刊标准。</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-3 max-h-[700px] overflow-y-auto pr-2">
+                              {styleResult.suggestions.map((sug, idx) => {
+                                const dim = STYLE_DIMENSIONS.find(d => d.key === sug.dimension);
+                                const severityStyles = {
+                                  high: 'border-red-500/40 bg-red-500/5 hover:bg-red-500/10',
+                                  medium: 'border-amber-500/40 bg-amber-500/5 hover:bg-amber-500/10',
+                                  low: 'border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10'
+                                };
+                                const severityLabels = { high: '高', medium: '中', low: '低' };
+                                const severityColors = { high: 'text-red-400 bg-red-500/20', medium: 'text-amber-400 bg-amber-500/20', low: 'text-sky-400 bg-sky-500/20' };
+                                const isActive = activeStyleHighlight && activeStyleHighlight.start === sug.start && activeStyleHighlight.end === sug.end;
+                                const hasPosition = sug.start > 0 || sug.end > 0;
+                                return (
+                                  <motion.div
+                                    key={idx}
+                                    initial={{ opacity: 0, x: 10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: idx * 0.04 }}
+                                    onClick={() => hasPosition && scrollToStylePosition(sug)}
+                                    className={`p-4 rounded-xl border transition-all cursor-pointer ${severityStyles[sug.severity] || severityStyles.medium} ${isActive ? 'ring-2 ring-white/50 scale-[1.01]' : ''}`}
+                                  >
+                                    <div className="flex items-start justify-between gap-3 mb-2">
+                                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                                        {dim && (
+                                          <span className={`inline-flex text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r ${dim.color} text-white`}>
+                                            {dim.label}
+                                          </span>
+                                        )}
+                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${severityColors[sug.severity] || severityColors.medium}`}>
+                                          {severityLabels[sug.severity]}优先级
+                                        </span>
+                                      </div>
+                                      {hasPosition && (
+                                        <Info className="w-4 h-4 text-slate-500 flex-shrink-0 mt-0.5" />
+                                      )}
+                                    </div>
+                                    <p className="text-sm font-bold text-white mb-1">{sug.title}</p>
+                                    <p className="text-xs text-slate-400 leading-relaxed">{sug.message}</p>
+                                    {sug.text && (
+                                      <div className="mt-2 p-2 bg-slate-950/60 rounded-lg border border-slate-800">
+                                        <p className="text-[11px] text-slate-500 mb-1">关联原文：</p>
+                                        <p className="text-xs text-slate-300 line-clamp-2 italic">"{sug.text}"</p>
+                                      </div>
+                                    )}
+                                  </motion.div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {!styleResult && !styleLoading && (
+                  <div className="bg-slate-900/50 border border-dashed border-slate-800 rounded-3xl p-12 text-center">
+                    <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-slate-800 flex items-center justify-center">
+                      <Gauge className="w-8 h-8 text-slate-600" />
+                    </div>
+                    <h3 className="text-slate-400 font-bold mb-2">粘贴论文文本，一键诊断写作风格</h3>
+                    <p className="text-sm text-slate-600 max-w-md mx-auto">
+                      系统将从句子长度、词汇丰富度、被动语态、逻辑连接词、段落结构五个维度进行分析，对比 SCI 期刊标准，生成带原文定位的改进建议。
                     </p>
                   </div>
                 )}

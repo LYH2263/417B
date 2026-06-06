@@ -11,6 +11,7 @@ try:
     from app.continuation import generate_continuations, generate_continuations_stream
     from app.rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
     from app.summarizer import summarize_paper
+    from app.style_analyzer import analyze_writing_style
 except ImportError:
     try:
         from .parser import extract_text
@@ -19,6 +20,7 @@ except ImportError:
         from .continuation import generate_continuations, generate_continuations_stream
         from .rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
         from .summarizer import summarize_paper
+        from .style_analyzer import analyze_writing_style
     except ImportError:
         from parser import extract_text
         from detector import detect_ai_content
@@ -26,6 +28,7 @@ except ImportError:
         from continuation import generate_continuations, generate_continuations_stream
         from rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
         from summarizer import summarize_paper
+        from style_analyzer import analyze_writing_style
 
 app = FastAPI(title="Academic AIGC Helper API")
 
@@ -48,6 +51,10 @@ class RewritePayload(BaseModel):
 class ContinuationPayload(BaseModel):
     text: str
     direction: str = "continue"
+
+class StyleAnalysisPayload(BaseModel):
+    text: str
+    journal_level: str = "sci_q2"
 
 @app.post("/api/rewrite")
 async def rewrite(payload: RewritePayload):
@@ -258,3 +265,23 @@ async def summarize_file_endpoint(file: UploadFile = File(...)):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8417)
+
+MAX_STYLE_LENGTH = 30000
+
+@app.post("/api/style-analyze")
+async def style_analyze_endpoint(payload: StyleAnalysisPayload):
+    if not payload.text or not payload.text.strip():
+        raise HTTPException(status_code=400, detail="No text provided")
+    if len(payload.text.strip()) > MAX_STYLE_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Text exceeds maximum length of {MAX_STYLE_LENGTH} characters. Current length: {len(payload.text.strip())}"
+        )
+    valid_levels = ["sci_q1", "sci_q2", "sci_q3"]
+    if payload.journal_level not in valid_levels:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid journal_level. Must be one of: {valid_levels}"
+        )
+    result = analyze_writing_style(payload.text, payload.journal_level)
+    return result
