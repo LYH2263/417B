@@ -23,6 +23,16 @@ try:
         create_version, get_versions, get_version, get_version_content,
         compare_versions, add_tag, remove_tag, delete_version
     )
+    from app.notifications import (
+        create_notification, get_notification, get_notifications,
+        get_unread_count, mark_as_read, mark_all_as_read, mark_multiple_as_read,
+        delete_notification, delete_multiple_notifications, get_notification_stats,
+        CreateNotificationRequest, MarkReadRequest, NOTIFICATION_TYPES
+    )
+    from app.operation_logs import (
+        log_operation, get_operation_log, get_operation_logs, get_operation_log_stats,
+        LogOperationRequest, OPERATION_TYPES
+    )
 except ImportError:
     try:
         from .parser import extract_text
@@ -40,6 +50,16 @@ except ImportError:
             create_version, get_versions, get_version, get_version_content,
             compare_versions, add_tag, remove_tag, delete_version
         )
+        from .notifications import (
+            create_notification, get_notification, get_notifications,
+            get_unread_count, mark_as_read, mark_all_as_read, mark_multiple_as_read,
+            delete_notification, delete_multiple_notifications, get_notification_stats,
+            CreateNotificationRequest, MarkReadRequest, NOTIFICATION_TYPES
+        )
+        from .operation_logs import (
+            log_operation, get_operation_log, get_operation_logs, get_operation_log_stats,
+            LogOperationRequest, OPERATION_TYPES
+        )
     except ImportError:
         from parser import extract_text
         from rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
@@ -55,6 +75,16 @@ except ImportError:
         from versioning import (
             create_version, get_versions, get_version, get_version_content,
             compare_versions, add_tag, remove_tag, delete_version
+        )
+        from notifications import (
+            create_notification, get_notification, get_notifications,
+            get_unread_count, mark_as_read, mark_all_as_read, mark_multiple_as_read,
+            delete_notification, delete_multiple_notifications, get_notification_stats,
+            CreateNotificationRequest, MarkReadRequest, NOTIFICATION_TYPES
+        )
+        from operation_logs import (
+            log_operation, get_operation_log, get_operation_logs, get_operation_log_stats,
+            LogOperationRequest, OPERATION_TYPES
         )
 
 def _lazy_import(name):
@@ -922,6 +952,159 @@ async def remove_version_tag(tag_id: int):
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "timestamp": time.time()}
+
+
+class DeleteNotificationsRequest(BaseModel):
+    notification_ids: List[int] = []
+
+
+@app.get("/api/notifications/types")
+async def list_notification_types():
+    return {
+        "types": [
+            {"key": k, "label": v} for k, v in NOTIFICATION_TYPES.items()
+        ]
+    }
+
+
+@app.get("/api/notifications")
+async def list_notifications(
+    page: int = 1,
+    page_size: int = 20,
+    type: Optional[str] = None,
+    is_read: Optional[str] = None
+):
+    is_read_bool = None
+    if is_read is not None:
+        is_read_bool = is_read.lower() in ("true", "1", "yes")
+    return get_notifications(page=page, page_size=page_size, type=type, is_read=is_read_bool)
+
+
+@app.get("/api/notifications/{notification_id}")
+async def get_single_notification(notification_id: int):
+    notification = get_notification(notification_id)
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return notification
+
+
+@app.post("/api/notifications")
+async def create_new_notification(req: CreateNotificationRequest):
+    try:
+        return create_notification(
+            type=req.type,
+            title=req.title,
+            content=req.content or "",
+            metadata=req.metadata or {}
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/notifications/unread/count")
+async def get_unread_notification_count():
+    return {"count": get_unread_count()}
+
+
+@app.post("/api/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: int):
+    ok = mark_as_read(notification_id)
+    if not ok:
+        notification = get_notification(notification_id)
+        if not notification:
+            raise HTTPException(status_code=404, detail="Notification not found")
+    return {"success": True}
+
+
+@app.post("/api/notifications/read/all")
+async def mark_all_notifications_read(type: Optional[str] = None):
+    count = mark_all_as_read(type)
+    return {"success": True, "marked_count": count}
+
+
+@app.post("/api/notifications/read/multiple")
+async def mark_multiple_notifications_read(req: MarkReadRequest):
+    ids = req.notification_ids or []
+    count = mark_multiple_as_read(ids)
+    return {"success": True, "marked_count": count}
+
+
+@app.delete("/api/notifications/{notification_id}")
+async def delete_single_notification(notification_id: int):
+    ok = delete_notification(notification_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"success": True}
+
+
+@app.post("/api/notifications/delete/multiple")
+async def delete_batch_notifications(req: DeleteNotificationsRequest):
+    count = delete_multiple_notifications(req.notification_ids or [])
+    return {"success": True, "deleted_count": count}
+
+
+@app.get("/api/notifications/stats/summary")
+async def get_notifications_stats():
+    return get_notification_stats()
+
+
+@app.get("/api/operation-logs/types")
+async def list_operation_types():
+    return {
+        "types": [
+            {"key": k, "label": v} for k, v in OPERATION_TYPES.items()
+        ]
+    }
+
+
+@app.post("/api/operation-logs")
+async def create_operation_log(req: LogOperationRequest):
+    return log_operation(
+        operation_type=req.operation_type,
+        description=req.description or "",
+        status=req.status or "success",
+        details=req.details or {},
+        user_id=req.user_id or "anonymous",
+        session_id=req.session_id,
+        duration_ms=req.duration_ms or 0
+    )
+
+
+@app.get("/api/operation-logs")
+async def list_operation_logs(
+    page: int = 1,
+    page_size: int = 20,
+    operation_type: Optional[str] = None,
+    status: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    user_id: Optional[str] = None
+):
+    return get_operation_logs(
+        page=page,
+        page_size=page_size,
+        operation_type=operation_type,
+        status=status,
+        start_time=start_time,
+        end_time=end_time,
+        user_id=user_id
+    )
+
+
+@app.get("/api/operation-logs/{log_id}")
+async def get_single_operation_log(log_id: int):
+    log = get_operation_log(log_id)
+    if not log:
+        raise HTTPException(status_code=404, detail="Operation log not found")
+    return log
+
+
+@app.get("/api/operation-logs/stats/summary")
+async def get_operation_stats(
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None
+):
+    return get_operation_log_stats(start_time=start_time, end_time=end_time)
 
 
 if __name__ == "__main__":

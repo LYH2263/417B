@@ -15,8 +15,64 @@ import RatingStatistics from './components/RatingStatistics';
 import SuggestionBanner from './components/SuggestionBanner';
 import CollabEditor from './components/CollabEditor';
 import VersionPanel from './components/VersionPanel';
+import NotificationCenter from './components/NotificationCenter';
 
 const API_BASE = "http://localhost:8417/api";
+
+let _lastQuotaWarningTime = 0;
+
+const logOperation = async (operationType, description, status = 'success', details = {}, durationMs = 0) => {
+  try {
+    await axios.post(`${API_BASE}/operation-logs`, {
+      operation_type: operationType,
+      description,
+      status,
+      details,
+      duration_ms: durationMs
+    });
+  } catch (e) {
+  }
+};
+
+const createNotification = async (type, title, content, metadata = {}) => {
+  try {
+    const res = await axios.post(`${API_BASE}/notifications`, {
+      type,
+      title,
+      content,
+      metadata
+    });
+    window.dispatchEvent(new CustomEvent('notifications-updated'));
+    return res.data;
+  } catch (e) {
+    return null;
+  }
+};
+
+const triggerBrowserNotification = (title, body) => {
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try {
+      new Notification(title, { body, icon: '/vite.svg' });
+    } catch (e) {}
+  }
+};
+
+const checkAndNotifyQuota = (quota) => {
+  if (quota < 3 && quota > 0) {
+    const now = Date.now();
+    if (now - _lastQuotaWarningTime > 3600000) {
+      _lastQuotaWarningTime = now;
+      createNotification(
+        'quota_warning',
+        '额度预警',
+        `剩余额度不足 3 次，当前剩余 ${quota} 次。请及时升级账户或明天再试。`,
+        { remaining_quota: quota }
+      ).then(() => {
+        triggerBrowserNotification('额度预警', `剩余额度仅 ${quota} 次`);
+      });
+    }
+  }
+};
 
 const DIRECTIONS = [
   { key: "continue", label: "继续论述", icon: ArrowRightLeft, color: "from-indigo-500 to-blue-500", desc: "深化分析，延展论证" },
@@ -136,7 +192,11 @@ function App() {
 
   const decreaseQuota = () => {
     if (quota > 0) {
-      setQuota(prev => prev - 1);
+      setQuota(prev => {
+        const newQuota = prev - 1;
+        checkAndNotifyQuota(newQuota);
+        return newQuota;
+      });
     }
   };
 
@@ -159,6 +219,7 @@ function App() {
     setSumResult(null);
     const formData = new FormData();
     formData.append('file', selectedFile);
+    const startTime = Date.now();
 
     try {
       const response = await axios.post(`${API_BASE}/summarize-file`, formData);
@@ -166,9 +227,23 @@ function App() {
       if (response.data.original_text) setSumText(response.data.original_text);
       setSumEditable({ ...response.data.structured_summary });
       decreaseQuota();
+      logOperation(
+        'summarize',
+        `上传文件 ${selectedFile.name} 生成摘要`,
+        'success',
+        { filename: selectedFile.name, size: selectedFile.size },
+        Date.now() - startTime
+      );
       setTimeout(() => document.getElementById('summary-results-section')?.scrollIntoView({ behavior: 'smooth' }), 300);
     } catch (err) {
       alert("智能摘要失败: " + (err.response?.data?.detail || err.message));
+      logOperation(
+        'summarize',
+        `文件 ${selectedFile.name} 摘要生成失败`,
+        'failed',
+        { filename: selectedFile.name, error: err.message },
+        Date.now() - startTime
+      );
     } finally {
       setSumLoading(false);
     }
@@ -189,14 +264,29 @@ function App() {
 
     setSumLoading(true);
     setSumResult(null);
+    const startTime = Date.now();
     try {
       const response = await axios.post(`${API_BASE}/summarize-text`, { text: sumText });
       setSumResult(response.data);
       setSumEditable({ ...response.data.structured_summary });
       decreaseQuota();
+      logOperation(
+        'summarize',
+        '生成文本摘要',
+        'success',
+        { text_length: sumText.length },
+        Date.now() - startTime
+      );
       setTimeout(() => document.getElementById('summary-results-section')?.scrollIntoView({ behavior: 'smooth' }), 300);
     } catch (err) {
       alert("智能摘要失败: " + (err.response?.data?.detail || err.message));
+      logOperation(
+        'summarize',
+        '文本摘要生成失败',
+        'failed',
+        { text_length: sumText.length, error: err.message },
+        Date.now() - startTime
+      );
     } finally {
       setSumLoading(false);
     }
@@ -254,6 +344,8 @@ function App() {
     setStyleLoading(true);
     setStyleResult(null);
     setActiveStyleHighlight(null);
+    const startTime = Date.now();
+    const levelLabel = JOURNAL_LEVELS.find(l => l.key === styleLevel)?.label || styleLevel;
     try {
       const response = await axios.post(`${API_BASE}/style-analyze`, {
         text: styleText,
@@ -261,9 +353,23 @@ function App() {
       });
       setStyleResult(response.data);
       decreaseQuota();
+      logOperation(
+        'style_analyze',
+        `执行${levelLabel}写作风格诊断`,
+        'success',
+        { journal_level: styleLevel, text_length: styleText.length },
+        Date.now() - startTime
+      );
       setTimeout(() => document.getElementById('style-results-section')?.scrollIntoView({ behavior: 'smooth' }), 300);
     } catch (err) {
       alert("写作风格诊断失败: " + (err.response?.data?.detail || err.message));
+      logOperation(
+        'style_analyze',
+        `${levelLabel}写作风格诊断失败`,
+        'failed',
+        { journal_level: styleLevel, text_length: styleText.length, error: err.message },
+        Date.now() - startTime
+      );
     } finally {
       setStyleLoading(false);
     }
@@ -354,6 +460,7 @@ function App() {
     setPlagSuggestions({});
     setPlagSuggestLoading({});
     setPlagActiveGroup(null);
+    const startTime = Date.now();
     try {
       const customList = plagCustomWhitelist
         .split(/[,，\n]/)
@@ -368,9 +475,28 @@ function App() {
       });
       setPlagResult(response.data);
       decreaseQuota();
+      logOperation(
+        'self_plagiarism',
+        '执行内部查重检测',
+        'success',
+        {
+          text_length: plagText.length,
+          threshold: plagThreshold,
+          window_size: plagWindowSize,
+          group_count: response.data.groups?.length || 0
+        },
+        Date.now() - startTime
+      );
       setTimeout(() => document.getElementById('plag-results-section')?.scrollIntoView({ behavior: 'smooth' }), 300);
     } catch (err) {
       alert("内部查重检测失败: " + (err.response?.data?.detail || err.message));
+      logOperation(
+        'self_plagiarism',
+        '内部查重检测失败',
+        'failed',
+        { text_length: plagText.length, error: err.message },
+        Date.now() - startTime
+      );
     } finally {
       setPlagLoading(false);
     }
@@ -387,13 +513,28 @@ function App() {
     setPlagResult(null);
     const formData = new FormData();
     formData.append('file', selectedFile);
+    const startTime = Date.now();
     try {
       const response = await axios.post(`${API_BASE}/detect-file`, formData);
       if (response.data.text) setPlagText(response.data.text);
       decreaseQuota();
+      logOperation(
+        'file_upload',
+        `上传文件 ${selectedFile.name} 用于内部查重`,
+        'success',
+        { filename: selectedFile.name, size: selectedFile.size },
+        Date.now() - startTime
+      );
       setTimeout(() => document.getElementById('plag-input-section')?.scrollIntoView({ behavior: 'smooth' }), 300);
     } catch (err) {
       alert("文件上传失败: " + err.message);
+      logOperation(
+        'file_upload',
+        `查重文件 ${selectedFile.name} 上传失败`,
+        'failed',
+        { filename: selectedFile.name, error: err.message },
+        Date.now() - startTime
+      );
     } finally {
       setPlagLoading(false);
     }
@@ -407,6 +548,7 @@ function App() {
     const gid = group.group_id;
     if (plagSuggestLoading[gid]) return;
     setPlagSuggestLoading(prev => ({ ...prev, [gid]: true }));
+    const startTime = Date.now();
     try {
       const response = await axios.post(`${API_BASE}/internal-plagiarism/suggest`, {
         text: plagText,
@@ -415,8 +557,22 @@ function App() {
       });
       setPlagSuggestions(prev => ({ ...prev, [gid]: response.data }));
       decreaseQuota();
+      logOperation(
+        'self_plagiarism',
+        `生成重复组 #${gid + 1} 的去重建议`,
+        'success',
+        { group_id: gid, sentence_count: group.sentence_indices?.length || 0 },
+        Date.now() - startTime
+      );
     } catch (err) {
       alert("去重建议生成失败: " + (err.response?.data?.detail || err.message));
+      logOperation(
+        'self_plagiarism',
+        '去重建议生成失败',
+        'failed',
+        { group_id: gid, error: err.message },
+        Date.now() - startTime
+      );
     } finally {
       setPlagSuggestLoading(prev => ({ ...prev, [gid]: false }));
     }
@@ -661,15 +817,30 @@ function App() {
     setRewriteResult(null);
     const formData = new FormData();
     formData.append('file', selectedFile);
+    const startTime = Date.now();
 
     try {
       const response = await axios.post(`${API_BASE}/detect-file`, formData);
       setResult(response.data);
       if (response.data.text) setText(response.data.text);
       decreaseQuota();
+      logOperation(
+        'file_upload',
+        `上传文件 ${selectedFile.name} 执行检测`,
+        'success',
+        { filename: selectedFile.name, size: selectedFile.size, ai_score: response.data.overall_ai_score },
+        Date.now() - startTime
+      );
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
     } catch (err) {
       alert("Error uploading file: " + err.message);
+      logOperation(
+        'file_upload',
+        `上传文件 ${selectedFile.name} 检测失败`,
+        'failed',
+        { filename: selectedFile.name, error: err.message },
+        Date.now() - startTime
+      );
     } finally {
       setLoading(false);
     }
@@ -685,14 +856,29 @@ function App() {
 
     setLoading(true);
     setRewriteResult(null);
+    const startTime = Date.now();
     try {
       const response = await axios.post(`${API_BASE}/detect-text`, { text });
       setResult(response.data);
       setVersionRefreshTrigger(prev => prev + 1);
       decreaseQuota();
+      logOperation(
+        'detect',
+        '执行 AI 文本检测',
+        'success',
+        { text_length: text.length, ai_score: response.data.overall_ai_score },
+        Date.now() - startTime
+      );
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
     } catch (err) {
       alert("Error: " + err.message);
+      logOperation(
+        'detect',
+        'AI 文本检测失败',
+        'failed',
+        { text_length: text.length, error: err.message },
+        Date.now() - startTime
+      );
     } finally {
       setLoading(false);
     }
@@ -707,6 +893,8 @@ function App() {
     }
 
     setRewriting(true);
+    const startTime = Date.now();
+    const levelLabel = rewriteLevel === 'low' ? '轻微' : rewriteLevel === 'high' ? '深度' : '中度';
     try {
       const response = await axios.post(`${API_BASE}/rewrite`, {
         text: text,
@@ -715,9 +903,41 @@ function App() {
       setRewriteResult(response.data);
       setVersionRefreshTrigger(prev => prev + 1);
       decreaseQuota();
+      logOperation(
+        'rewrite',
+        `执行${levelLabel}改写`,
+        'success',
+        {
+          level: rewriteLevel,
+          text_length: text.length,
+          ai_score_before: result?.overall_ai_score,
+          ai_score_after: response.data.detection_after?.overall_ai_score,
+          iterations: response.data.iterations
+        },
+        Date.now() - startTime
+      );
+      createNotification(
+        'rewrite_complete',
+        '改写任务完成',
+        `${levelLabel}改写已完成，改写后 AI 率降至 ${response.data.detection_after?.overall_ai_score ?? 'N/A'}%，共迭代 ${response.data.iterations} 次。`,
+        {
+          level: rewriteLevel,
+          ai_score_after: response.data.detection_after?.overall_ai_score,
+          iterations: response.data.iterations
+        }
+      ).then(() => {
+        triggerBrowserNotification('改写完成', `AI 率已降至 ${response.data.detection_after?.overall_ai_score ?? 'N/A'}%`);
+      });
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
     } catch (err) {
       alert("Rewriting failed: " + err.message);
+      logOperation(
+        'rewrite',
+        `${levelLabel}改写失败`,
+        'failed',
+        { level: rewriteLevel, text_length: text.length, error: err.message },
+        Date.now() - startTime
+      );
     } finally {
       setRewriting(false);
     }
@@ -728,6 +948,12 @@ function App() {
     setResult(null);
     setRewriteResult(null);
     setToastMsg("已恢复到所选版本");
+    logOperation(
+      'version_restore',
+      '恢复到历史版本',
+      'success',
+      { content_length: content.length }
+    );
     setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 100);
   };
 
@@ -747,6 +973,8 @@ function App() {
     setContLoading(true);
     setContGeneration(prev => prev + 1);
     decreaseQuota();
+    const startTime = Date.now();
+    const directionLabel = DIRECTIONS.find(d => d.key === contDirection)?.label || contDirection;
 
     if (useStream) {
       setContCandidates([
@@ -767,7 +995,6 @@ function App() {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let activeIdx = 0;
 
         while (true) {
           const { value, done } = await reader.read();
@@ -810,13 +1037,20 @@ function App() {
                 });
               }
             } catch (e) {
-              // ignore parse errors
             }
           }
         }
+        logOperation(
+          'continuation',
+          `生成${directionLabel}续写`,
+          'success',
+          { direction: contDirection, text_length: contText.length, mode: 'stream' },
+          Date.now() - startTime
+        );
       } catch (err) {
         alert("流式续写生成失败，切换到非流式模式: " + err.message);
         await handleGenerateContinuation(false);
+        return;
       } finally {
         setContLoading(false);
         setContCandidates(prev => prev.map(c => ({ ...c, streaming: false })));
@@ -832,8 +1066,22 @@ function App() {
           streaming: false,
           done: true
         })));
+        logOperation(
+          'continuation',
+          `生成${directionLabel}续写`,
+          'success',
+          { direction: contDirection, text_length: contText.length, mode: 'normal' },
+          Date.now() - startTime
+        );
       } catch (err) {
         alert("续写生成失败: " + err.message);
+        logOperation(
+          'continuation',
+          `${directionLabel}续写生成失败`,
+          'failed',
+          { direction: contDirection, text_length: contText.length, error: err.message },
+          Date.now() - startTime
+        );
       } finally {
         setContLoading(false);
       }
@@ -864,6 +1112,7 @@ function App() {
             <div className="text-xs text-slate-500 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
               今日额度: <span className={quota > 3 ? "text-indigo-400" : "text-red-400"}>{quota}/10</span>
             </div>
+            <NotificationCenter />
           </div>
         </div>
       </nav>
