@@ -19,6 +19,10 @@ try:
         get_dashboard_stats, verify_admin_token,
         CreateApiKeyRequest, UpdateRateLimitRequest, VerifyAdminRequest, ADMIN_TOKEN
     )
+    from app.versioning import (
+        create_version, get_versions, get_version, get_version_content,
+        compare_versions, add_tag, remove_tag, delete_version
+    )
 except ImportError:
     try:
         from .parser import extract_text
@@ -32,6 +36,10 @@ except ImportError:
             get_dashboard_stats, verify_admin_token,
             CreateApiKeyRequest, UpdateRateLimitRequest, VerifyAdminRequest, ADMIN_TOKEN
         )
+        from .versioning import (
+            create_version, get_versions, get_version, get_version_content,
+            compare_versions, add_tag, remove_tag, delete_version
+        )
     except ImportError:
         from parser import extract_text
         from rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
@@ -43,6 +51,10 @@ except ImportError:
             check_rate_limit, update_rate_limit, get_usage_stats,
             get_dashboard_stats, verify_admin_token,
             CreateApiKeyRequest, UpdateRateLimitRequest, VerifyAdminRequest, ADMIN_TOKEN
+        )
+        from versioning import (
+            create_version, get_versions, get_version, get_version_content,
+            compare_versions, add_tag, remove_tag, delete_version
         )
 
 def _lazy_import(name):
@@ -144,6 +156,28 @@ class DedupSuggestionPayload(BaseModel):
     group: dict
     sentences: List[dict]
 
+
+class CreateVersionPayload(BaseModel):
+    text: str
+    operation_type: str
+    ai_score: Optional[float] = 0.0
+    previous_version_id: Optional[int] = None
+
+
+class AddTagPayload(BaseModel):
+    version_id: int
+    tag_name: str
+    tag_color: Optional[str] = "#6366f1"
+
+
+class RemoveTagPayload(BaseModel):
+    tag_id: int
+
+
+class CompareVersionsPayload(BaseModel):
+    version_a_id: int
+    version_b_id: int
+
 @app.post("/api/rewrite")
 async def rewrite(payload: RewritePayload):
     if not payload.text:
@@ -153,20 +187,30 @@ async def rewrite(payload: RewritePayload):
     current_text = payload.text
     max_retries = 3
     detection_after = None
-    
+
     for i in range(max_retries):
         current_text = rewrite_text(current_text, payload.level)
         detection_after = detect_ai_content(current_text)
-        
-        # If AI score is below 10%, we are done
+
         if detection_after["overall_ai_score"] < 10:
             break
-            
+
+    op_type = f"rewrite_{payload.level}" if payload.level in ["low", "medium", "high"] else "rewrite_medium"
+    ai_score = detection_after["overall_ai_score"] if detection_after else 0.0
+    saved_version = None
+    try:
+        prev_versions = get_versions(page=1, page_size=1)
+        prev_id = prev_versions["versions"][0]["id"] if prev_versions["versions"] else None
+        saved_version = create_version(current_text, op_type, ai_score, prev_id)
+    except Exception:
+        pass
+
     return {
         "original_text": payload.text,
         "rewritten_text": current_text,
         "detection_after": detection_after,
-        "iterations": i + 1
+        "iterations": i + 1,
+        "saved_version": saved_version
     }
 
 @app.get("/")
@@ -179,7 +223,15 @@ async def detect_text(payload: TextPayload):
         raise HTTPException(status_code=400, detail="No text provided")
     detect_ai_content = _lazy_import("detect_ai_content")
     result = detect_ai_content(payload.text)
-    return result
+    ai_score = result.get("overall_ai_score", 0.0)
+    saved_version = None
+    try:
+        prev_versions = get_versions(page=1, page_size=1)
+        prev_id = prev_versions["versions"][0]["id"] if prev_versions["versions"] else None
+        saved_version = create_version(payload.text, "detect", ai_score, prev_id)
+    except Exception:
+        pass
+    return {**result, "saved_version": saved_version}
 
 @app.post("/api/detect-file")
 async def detect_file(file: UploadFile = File(...)):
@@ -795,6 +847,76 @@ async def admin_update_rate_limit(req: UpdateRateLimitRequest, _: bool = Depends
     if not ok:
         raise HTTPException(status_code=404, detail="API key not found")
     return {"success": True, "api_key_id": req.api_key_id, "requests_per_minute": req.requests_per_minute}
+
+
+@app.get("/api/versions")
+async def list_versions(page: int = 1, page_size: int = 20):
+    if page < 1:
+        page = 1
+    if page_size < 1 or page_size > 100:
+        page_size = 20
+    return get_versions(page, page_size)
+
+
+@app.get("/api/versions/{version_id}")
+async def get_version_detail(version_id: int):
+    version = get_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    return version
+
+
+@app.get("/api/versions/{version_id}/content")
+async def get_version_full_content(version_id: int):
+    try:
+        return get_version_content(version_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/versions/compare")
+async def compare_two_versions(payload: CompareVersionsPayload):
+    try:
+        return compare_versions(payload.version_a_id, payload.version_b_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/versions")
+async def create_new_version(payload: CreateVersionPayload):
+    try:
+        return create_version(
+            text=payload.text,
+            operation_type=payload.operation_type,
+            ai_score=payload.ai_score or 0.0,
+            previous_version_id=payload.previous_version_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/versions/{version_id}")
+async def delete_version_endpoint(version_id: int):
+    ok = delete_version(version_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Version not found")
+    return {"success": True}
+
+
+@app.post("/api/versions/tags")
+async def add_version_tag(payload: AddTagPayload):
+    try:
+        return add_tag(payload.version_id, payload.tag_name, payload.tag_color or "#6366f1")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/versions/tags/{tag_id}")
+async def remove_version_tag(tag_id: int):
+    ok = remove_tag(tag_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Tag not found")
+    return {"success": True}
 
 
 @app.get("/health")

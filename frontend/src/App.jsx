@@ -5,7 +5,8 @@ import {
   Check, RotateCcw, PenLine, Loader2, Copy, ThumbsUp, Feather, Lightbulb,
   ChevronDown, FileSearch, Highlighter, AlignJustify, BookOpen,
   Gauge, Target, AlertTriangle, Info, TrendingUp, Award, Type, Hash, Users,
-  Copy as CopyIcon, X, Eye, GitCompare, Settings2, Shuffle
+  Copy as CopyIcon, X, Eye, GitCompare, Settings2, Shuffle,
+  History
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -13,6 +14,7 @@ import RatingPanel from './components/RatingPanel';
 import RatingStatistics from './components/RatingStatistics';
 import SuggestionBanner from './components/SuggestionBanner';
 import CollabEditor from './components/CollabEditor';
+import VersionPanel from './components/VersionPanel';
 
 const API_BASE = "http://localhost:8417/api";
 
@@ -90,6 +92,9 @@ function App() {
   const [plagShowSettings, setPlagShowSettings] = useState(false);
   const plagTextViewRef = useRef(null);
   const MAX_PLAG_LENGTH = 50000;
+
+  const [showVersionPanel, setShowVersionPanel] = useState(true);
+  const [versionRefreshTrigger, setVersionRefreshTrigger] = useState(0);
 
   const PLAG_COLORS = [
     { bg: "bg-rose-500/25", border: "border-rose-500", text: "text-rose-300", ring: "ring-rose-500" },
@@ -683,6 +688,7 @@ function App() {
     try {
       const response = await axios.post(`${API_BASE}/detect-text`, { text });
       setResult(response.data);
+      setVersionRefreshTrigger(prev => prev + 1);
       decreaseQuota();
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
     } catch (err) {
@@ -707,6 +713,7 @@ function App() {
         level: rewriteLevel
       });
       setRewriteResult(response.data);
+      setVersionRefreshTrigger(prev => prev + 1);
       decreaseQuota();
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
     } catch (err) {
@@ -714,6 +721,14 @@ function App() {
     } finally {
       setRewriting(false);
     }
+  };
+
+  const handleRestoreVersion = (content) => {
+    setText(content);
+    setResult(null);
+    setRewriteResult(null);
+    setToastMsg("已恢复到所选版本");
+    setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 100);
   };
 
   const handleGenerateContinuation = useCallback(async (useStream = true) => {
@@ -937,8 +952,8 @@ function App() {
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.2 }}
             >
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                <div className="lg:col-span-12">
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+                <div className="xl:col-span-8 space-y-6">
                   <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group">
                     <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-cyan-500/5 pointer-events-none"></div>
 
@@ -946,6 +961,18 @@ function App() {
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex gap-2">
                           <button className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-medium border border-slate-700">文本模式</button>
+                          <button
+                            onClick={() => setShowVersionPanel(v => !v)}
+                            className={`px-3 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 border ${
+                              showVersionPanel
+                                ? 'bg-indigo-600 text-white border-indigo-500 shadow-lg shadow-indigo-500/20'
+                                : 'bg-slate-800 text-slate-400 hover:text-white border-slate-700'
+                            }`}
+                            title="文档版本库"
+                          >
+                            <History className="w-4 h-4" />
+                            版本库
+                          </button>
                           <div className="relative group">
                             <button
                               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${loading ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
@@ -1024,16 +1051,15 @@ function App() {
                       </div>
                     </div>
                   </div>
-                </div>
 
-                <AnimatePresence>
-                  {(result || rewriteResult) && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 40 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      id="results-section"
-                      className="lg:col-span-12 space-y-8"
-                    >
+                  <AnimatePresence>
+                    {(result || rewriteResult) && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 40 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        id="results-section"
+                        className="space-y-8"
+                      >
                       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 overflow-hidden relative">
                         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
                           <div>
@@ -1151,6 +1177,18 @@ function App() {
                     </motion.div>
                   )}
                 </AnimatePresence>
+                </div>
+
+                {showVersionPanel && (
+                  <div className="xl:col-span-4">
+                    <div className="xl:sticky xl:top-20 xl:h-[calc(100vh-6rem)]">
+                      <VersionPanel
+                        onRestoreContent={handleRestoreVersion}
+                        refreshTrigger={versionRefreshTrigger}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
