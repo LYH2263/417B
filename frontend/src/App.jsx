@@ -109,6 +109,7 @@ function App() {
   const [contCandidates, setContCandidates] = useState([]);
   const [contLoading, setContLoading] = useState(false);
   const [contGeneration, setContGeneration] = useState(0);
+  const [highlightedCandidateId, setHighlightedCandidateId] = useState(null);
   const abortRef = useRef(null);
 
   const [ratingRefreshKey, setRatingRefreshKey] = useState(0);
@@ -1141,6 +1142,9 @@ function App() {
                 setContCandidates(prev => prev.map(c =>
                   c.id === data.id ? { ...c, ai_score: data.ai_score } : c
                 ));
+                setHighlightedCandidateId(data.id);
+                setToastMsg(`候选 ${parseInt(data.id.split('_')[1]) + 1} AI 率检测完成：${data.ai_score}%`);
+                setTimeout(() => setHighlightedCandidateId(null), 1500);
               } else {
                 setContCandidates(prev => {
                   const next = [...prev];
@@ -1186,11 +1190,20 @@ function App() {
           text: contText,
           direction: contDirection
         });
-        setContCandidates(response.data.candidates.map(c => ({
+        setContCandidates(response.data.candidates.map((c, i) => ({
           ...c,
           streaming: false,
           done: true
         })));
+        response.data.candidates.forEach((c, i) => {
+          if (c.ai_score !== null && c.ai_score !== undefined) {
+            setTimeout(() => {
+              setHighlightedCandidateId(c.id);
+              setToastMsg(`候选 ${i + 1} AI 率检测完成：${c.ai_score}%`);
+              setTimeout(() => setHighlightedCandidateId(null), 1500);
+            }, i * 400);
+          }
+        });
         logOperation(
           'continuation',
           `生成${directionLabel}续写`,
@@ -1696,13 +1709,15 @@ function App() {
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      {contCandidates.map((cand, idx) => (
+                      {contCandidates.map((cand, idx) => {
+                        const isHighlighted = highlightedCandidateId === cand.id;
+                        return (
                         <motion.div
                           key={cand.id || idx}
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: idx * 0.1 }}
-                          className={`relative bg-slate-900 border rounded-3xl p-5 overflow-hidden transition-all ${cand.streaming ? 'border-indigo-500/50 shadow-xl shadow-indigo-500/10' : 'border-slate-800 hover:border-slate-700'}`}
+                          className={`relative bg-slate-900 border rounded-3xl p-5 overflow-hidden transition-all ${cand.streaming ? 'border-indigo-500/50 shadow-xl shadow-indigo-500/10' : 'border-slate-800 hover:border-slate-700'} ${isHighlighted ? 'ai-score-highlight' : ''}`}
                         >
                           <div className="flex items-start justify-between mb-3">
                             <div className="flex items-center gap-2">
@@ -1714,7 +1729,7 @@ function App() {
                               )}
                             </div>
                             {cand.ai_score !== null && cand.ai_score !== undefined ? (
-                              <div className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${cand.ai_score > 50 ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-green-500/10 text-green-400 border border-green-500/20'}`}>
+                              <div className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${cand.ai_score > 50 ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-green-500/10 text-green-400 border border-green-500/20'} ${isHighlighted ? 'score-badge-pop' : ''}`}>
                                 AI率 {cand.ai_score}%
                               </div>
                             ) : cand.done ? (
@@ -1757,7 +1772,7 @@ function App() {
                             <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 animate-pulse"></div>
                           )}
                         </motion.div>
-                      ))}
+                      )})}
                     </div>
                   </motion.div>
                 )}
