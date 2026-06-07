@@ -9,6 +9,7 @@ import time
 
 try:
     from app.parser import extract_text
+    from app.paper_metadata import extract_paper_metadata, export_bibtex, export_ris
     from app.rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
     from app.summarizer import summarize_paper
     from app.collab import room_manager
@@ -36,6 +37,7 @@ try:
 except ImportError:
     try:
         from .parser import extract_text
+        from .paper_metadata import extract_paper_metadata, export_bibtex, export_ris
         from .rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
         from .summarizer import summarize_paper
         from .collab import room_manager
@@ -62,6 +64,7 @@ except ImportError:
         )
     except ImportError:
         from parser import extract_text
+        from paper_metadata import extract_paper_metadata, export_bibtex, export_ris
         from rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
         from summarizer import summarize_paper
         from collab import room_manager
@@ -952,6 +955,46 @@ async def remove_version_tag(tag_id: int):
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "timestamp": time.time()}
+
+
+class ExportMetadataPayload(BaseModel):
+    metadata: dict
+    format: str = "bibtex"
+
+
+@app.post("/api/paper-metadata/extract")
+async def extract_paper_metadata_endpoint(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    content = await file.read()
+    try:
+        metadata = extract_paper_metadata(content)
+        return {
+            "filename": file.filename,
+            "metadata": metadata
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to extract metadata: {str(e)}")
+
+
+@app.post("/api/paper-metadata/export")
+async def export_paper_metadata_endpoint(payload: ExportMetadataPayload):
+    if not payload.metadata:
+        raise HTTPException(status_code=400, detail="No metadata provided")
+    fmt = payload.format.lower()
+    if fmt not in {"bibtex", "ris"}:
+        raise HTTPException(status_code=400, detail="Unsupported format. Use 'bibtex' or 'ris'.")
+    try:
+        if fmt == "bibtex":
+            output = export_bibtex(payload.metadata)
+        else:
+            output = export_ris(payload.metadata)
+        return {
+            "format": fmt,
+            "content": output
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to export: {str(e)}")
 
 
 class DeleteNotificationsRequest(BaseModel):

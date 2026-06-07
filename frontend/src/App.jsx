@@ -6,7 +6,7 @@ import {
   ChevronDown, FileSearch, Highlighter, AlignJustify, BookOpen,
   Gauge, Target, AlertTriangle, Info, TrendingUp, Award, Type, Hash, Users,
   Copy as CopyIcon, X, Eye, GitCompare, Settings2, Shuffle,
-  History
+  History, IdCard, Mail, BookMarked, Quote, Pencil, Download, FileUp
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -152,6 +152,14 @@ function App() {
   const [showVersionPanel, setShowVersionPanel] = useState(true);
   const [versionRefreshTrigger, setVersionRefreshTrigger] = useState(0);
 
+  const [paperFile, setPaperFile] = useState(null);
+  const [paperLoading, setPaperLoading] = useState(false);
+  const [paperMetadata, setPaperMetadata] = useState(null);
+  const [paperEditable, setPaperEditable] = useState(null);
+  const [paperEditingField, setPaperEditingField] = useState(null);
+  const [paperExportFormat, setPaperExportFormat] = useState(null);
+  const [paperExportContent, setPaperExportContent] = useState("");
+
   const PLAG_COLORS = [
     { bg: "bg-rose-500/25", border: "border-rose-500", text: "text-rose-300", ring: "ring-rose-500" },
     { bg: "bg-amber-500/25", border: "border-amber-500", text: "text-amber-300", ring: "ring-amber-500" },
@@ -187,6 +195,12 @@ function App() {
     setPlagSuggestions({});
     setPlagSuggestLoading({});
     setPlagActiveGroup(null);
+    setPaperFile(null);
+    setPaperMetadata(null);
+    setPaperEditable(null);
+    setPaperEditingField(null);
+    setPaperExportFormat(null);
+    setPaperExportContent("");
     scrollToInput();
   };
 
@@ -634,6 +648,117 @@ function App() {
         }
       }
     }, 50);
+  };
+
+  const handlePaperFileUpload = async (e) => {
+    const selectedFile = e.target.files[0];
+    if (!selectedFile) return;
+    if (!selectedFile.name.toLowerCase().endsWith('.pdf')) {
+      alert("仅支持 PDF 文件");
+      return;
+    }
+    if (quota <= 0) {
+      alert("今日额度已用完，请明天再试或升级账户。");
+      return;
+    }
+    setPaperFile(selectedFile);
+    setPaperLoading(true);
+    setPaperMetadata(null);
+    setPaperEditable(null);
+    setPaperEditingField(null);
+    setPaperExportFormat(null);
+    setPaperExportContent("");
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    const startTime = Date.now();
+    try {
+      const response = await axios.post(`${API_BASE}/paper-metadata/extract`, formData);
+      setPaperMetadata(response.data.metadata);
+      setPaperEditable({ ...response.data.metadata });
+      decreaseQuota();
+      logOperation(
+        'paper_metadata_extract',
+        `上传论文 ${selectedFile.name} 提取元数据`,
+        'success',
+        { filename: selectedFile.name, size: selectedFile.size },
+        Date.now() - startTime
+      );
+      setTimeout(() => document.getElementById('paper-metadata-card-section')?.scrollIntoView({ behavior: 'smooth' }), 300);
+    } catch (err) {
+      alert("论文元数据提取失败: " + (err.response?.data?.detail || err.message));
+      logOperation(
+        'paper_metadata_extract',
+        `论文 ${selectedFile.name} 元数据提取失败`,
+        'failed',
+        { filename: selectedFile.name, error: err.message },
+        Date.now() - startTime
+      );
+    } finally {
+      setPaperLoading(false);
+    }
+  };
+
+  const handlePaperFieldEdit = (field, value) => {
+    setPaperEditable(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handlePaperArrayFieldEdit = (field, index, value) => {
+    setPaperEditable(prev => {
+      const arr = [...(prev[field] || [])];
+      arr[index] = value;
+      return { ...prev, [field]: arr };
+    });
+  };
+
+  const handlePaperArrayFieldAdd = (field) => {
+    setPaperEditable(prev => {
+      const arr = [...(prev[field] || [])];
+      arr.push("");
+      return { ...prev, [field]: arr };
+    });
+  };
+
+  const handlePaperArrayFieldRemove = (field, index) => {
+    setPaperEditable(prev => {
+      const arr = [...(prev[field] || [])];
+      arr.splice(index, 1);
+      return { ...prev, [field]: arr };
+    });
+  };
+
+  const handlePaperExport = async (format) => {
+    if (!paperEditable) return;
+    try {
+      const response = await axios.post(`${API_BASE}/paper-metadata/export`, {
+        metadata: paperEditable,
+        format
+      });
+      setPaperExportFormat(format);
+      setPaperExportContent(response.data.content);
+    } catch (err) {
+      alert("导出失败: " + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  const handlePaperCopyExport = () => {
+    if (!paperExportContent) return;
+    navigator.clipboard.writeText(paperExportContent);
+    setToastMsg(`已复制 ${paperExportFormat.toUpperCase()} 格式引用`);
+  };
+
+  const handlePaperDownloadExport = () => {
+    if (!paperExportContent || !paperExportFormat) return;
+    const ext = paperExportFormat === 'bibtex' ? 'bib' : 'ris';
+    const mime = paperExportFormat === 'bibtex' ? 'application/x-bibtex' : 'application/x-research-info-systems';
+    const blob = new Blob([paperExportContent], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `paper.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const renderPlagHighlightedText = (text, sentences, groups, activeGroup) => {
@@ -1188,6 +1313,13 @@ function App() {
             >
               <Users className="w-4 h-4" />
               实时协作
+            </button>
+            <button
+              onClick={() => setActiveTab("paper_info")}
+              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${activeTab === "paper_info" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20" : "text-slate-500 hover:text-slate-300"}`}
+            >
+              <IdCard className="w-4 h-4" />
+              论文信息卡
             </button>
           </div>
         </div>
@@ -2714,6 +2846,512 @@ function App() {
                   }
                 }}
               />
+            </motion.div>
+          )}
+
+          {activeTab === "paper_info" && (
+            <motion.div
+              key="paper_info"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.2 }}
+            >
+              <div className="mb-6 bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group">
+                <div className="absolute inset-0 bg-gradient-to-br from-fuchsia-500/5 via-indigo-500/5 to-cyan-500/5 pointer-events-none"></div>
+                <div className="relative">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5">
+                    <div>
+                      <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                        <IdCard className="w-5 h-5 text-fuchsia-400" />
+                        论文信息提取
+                      </h2>
+                      <p className="text-sm text-slate-400 mt-1">
+                        上传 PDF 论文，自动识别标题、作者、摘要、关键词、期刊等元数据
+                      </p>
+                    </div>
+                    <div className="relative group">
+                      <button
+                        className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${paperLoading ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-gradient-to-r from-fuchsia-600 to-indigo-600 hover:from-fuchsia-500 hover:to-indigo-500 text-white shadow-lg shadow-fuchsia-500/20'}`}
+                        disabled={paperLoading}
+                      >
+                        {paperLoading ? (
+                          <>
+                            <RefreshCcw className="w-4 h-4 animate-spin" />
+                            解析中...
+                          </>
+                        ) : (
+                          <>
+                            <FileUp className="w-4 h-4" />
+                            上传 PDF 论文
+                          </>
+                        )}
+                      </button>
+                      <input
+                        type="file"
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        onChange={handlePaperFileUpload}
+                        accept=".pdf"
+                        disabled={paperLoading}
+                      />
+                    </div>
+                  </div>
+                  {paperFile && (
+                    <div className="flex items-center gap-3 px-4 py-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                      <FileText className="w-5 h-5 text-fuchsia-400" />
+                      <span className="text-sm text-slate-300 flex-1 truncate">{paperFile.name}</span>
+                      <span className="text-xs text-slate-500">{(paperFile.size / 1024).toFixed(1)} KB</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {paperLoading && !paperMetadata && (
+                <div className="bg-slate-900/50 border border-dashed border-slate-800 rounded-3xl p-16 text-center">
+                  <div className="w-20 h-20 mx-auto mb-5 rounded-3xl bg-gradient-to-br from-fuchsia-500/20 to-indigo-500/20 flex items-center justify-center">
+                    <RefreshCcw className="w-10 h-10 text-fuchsia-400 animate-spin" />
+                  </div>
+                  <h3 className="text-lg text-slate-300 font-bold mb-2">正在解析论文元数据...</h3>
+                  <p className="text-sm text-slate-500 max-w-md mx-auto">
+                    正在识别标题、作者、摘要、关键词、期刊信息和参考文献数量，请稍候。
+                  </p>
+                </div>
+              )}
+
+              {paperEditable && (
+                <div id="paper-metadata-card-section" className="space-y-6">
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
+                    <div className="relative p-8 bg-gradient-to-br from-fuchsia-600 via-indigo-600 to-cyan-600">
+                      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_rgba(255,255,255,0.15),_transparent_60%)]"></div>
+                      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,_rgba(0,0,0,0.2),_transparent_60%)]"></div>
+                      <div className="relative">
+                        <div className="flex items-center gap-2 mb-4">
+                          <span className="px-3 py-1 bg-white/15 backdrop-blur-sm rounded-full text-xs font-bold text-white/90 border border-white/20">
+                            论文元数据
+                          </span>
+                          <span className="px-3 py-1 bg-white/15 backdrop-blur-sm rounded-full text-xs font-bold text-white/90 border border-white/20 flex items-center gap-1">
+                            <BookMarked className="w-3 h-3" />
+                            {paperEditable.journal || "未识别期刊"}
+                          </span>
+                        </div>
+                        <div className="group">
+                          {paperEditingField === 'title' ? (
+                            <input
+                              autoFocus
+                              className="w-full bg-white/10 border border-white/30 rounded-xl px-4 py-3 text-white text-2xl md:text-3xl font-black tracking-tight placeholder-white/50 outline-none focus:ring-2 focus:ring-white/50 backdrop-blur-sm"
+                              value={paperEditable.title || ""}
+                              onChange={(e) => handlePaperFieldEdit('title', e.target.value)}
+                              onBlur={() => setPaperEditingField(null)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') setPaperEditingField(null); }}
+                              placeholder="论文标题"
+                            />
+                          ) : (
+                            <h1
+                              className="text-2xl md:text-3xl font-black text-white tracking-tight cursor-pointer pr-8 group-hover:bg-white/5 rounded-xl px-2 py-1 -mx-2 -my-1 transition-colors"
+                              onClick={() => setPaperEditingField('title')}
+                              title="点击编辑标题"
+                            >
+                              {paperEditable.title || "（未识别到标题，点击填写）"}
+                            </h1>
+                          )}
+                          <Pencil className="absolute top-2 right-2 w-4 h-4 text-white/60 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="divide-y divide-slate-800">
+                      <div className="p-6 group">
+                        <div className="flex items-start gap-4">
+                          <div className="w-10 h-10 rounded-xl bg-indigo-500/15 flex items-center justify-center flex-shrink-0">
+                            <Users className="w-5 h-5 text-indigo-400" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+                              作者列表
+                              <button
+                                onClick={() => handlePaperArrayFieldAdd('authors')}
+                                className="ml-auto text-indigo-400 hover:text-indigo-300 text-[11px] font-bold flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                              >
+                                + 添加作者
+                              </button>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {(paperEditable.authors && paperEditable.authors.length > 0) ? (
+                                paperEditable.authors.map((author, idx) => (
+                                  <div key={idx} className="group/item relative">
+                                    {paperEditingField === `authors_${idx}` ? (
+                                      <input
+                                        autoFocus
+                                        className="bg-slate-950 border border-indigo-500/50 rounded-full px-3 py-1.5 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50"
+                                        value={author}
+                                        onChange={(e) => handlePaperArrayFieldEdit('authors', idx, e.target.value)}
+                                        onBlur={() => setPaperEditingField(null)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') setPaperEditingField(null); }}
+                                      />
+                                    ) : (
+                                      <span
+                                        className="inline-flex items-center gap-1 bg-indigo-500/10 text-indigo-300 border border-indigo-500/30 rounded-full px-3 py-1.5 text-sm font-medium cursor-pointer hover:bg-indigo-500/20 transition-colors"
+                                        onClick={() => setPaperEditingField(`authors_${idx}`)}
+                                      >
+                                        {author || "（点击编辑）"}
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); handlePaperArrayFieldRemove('authors', idx); }}
+                                          className="ml-1 text-indigo-400/60 hover:text-red-400 opacity-0 group-hover/item:opacity-100 transition-opacity"
+                                          title="删除此作者"
+                                        >
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                      </span>
+                                    )}
+                                  </div>
+                                ))
+                              ) : (
+                                <span
+                                  className="inline-flex items-center gap-1 bg-slate-800/50 text-slate-500 border border-dashed border-slate-700 rounded-full px-3 py-1.5 text-sm cursor-pointer hover:bg-slate-800 transition-colors"
+                                  onClick={() => handlePaperArrayFieldAdd('authors')}
+                                >
+                                  （未识别到作者，点击添加）
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {paperEditable.abstract_zh && (
+                        <div className="p-6 group">
+                          <div className="flex items-start gap-4">
+                            <div className="w-10 h-10 rounded-xl bg-fuchsia-500/15 flex items-center justify-center flex-shrink-0">
+                              <Quote className="w-5 h-5 text-fuchsia-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                                中文摘要
+                              </div>
+                              {paperEditingField === 'abstract_zh' ? (
+                                <textarea
+                                  autoFocus
+                                  className="w-full bg-slate-950 border border-fuchsia-500/50 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-fuchsia-500/50 min-h-[120px] leading-relaxed"
+                                  value={paperEditable.abstract_zh || ""}
+                                  onChange={(e) => handlePaperFieldEdit('abstract_zh', e.target.value)}
+                                  onBlur={() => setPaperEditingField(null)}
+                                />
+                              ) : (
+                                <p
+                                  className="text-slate-300 text-sm leading-relaxed cursor-pointer hover:bg-slate-800/50 rounded-xl px-3 py-2 -mx-3 -my-2 transition-colors"
+                                  onClick={() => setPaperEditingField('abstract_zh')}
+                                >
+                                  {paperEditable.abstract_zh}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {paperEditable.abstract_en && (
+                        <div className="p-6 group">
+                          <div className="flex items-start gap-4">
+                            <div className="w-10 h-10 rounded-xl bg-sky-500/15 flex items-center justify-center flex-shrink-0">
+                              <Quote className="w-5 h-5 text-sky-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                                English Abstract
+                              </div>
+                              {paperEditingField === 'abstract_en' ? (
+                                <textarea
+                                  autoFocus
+                                  className="w-full bg-slate-950 border border-sky-500/50 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-sky-500/50 min-h-[120px] leading-relaxed"
+                                  value={paperEditable.abstract_en || ""}
+                                  onChange={(e) => handlePaperFieldEdit('abstract_en', e.target.value)}
+                                  onBlur={() => setPaperEditingField(null)}
+                                />
+                              ) : (
+                                <p
+                                  className="text-slate-300 text-sm leading-relaxed cursor-pointer hover:bg-slate-800/50 rounded-xl px-3 py-2 -mx-3 -my-2 transition-colors"
+                                  onClick={() => setPaperEditingField('abstract_en')}
+                                >
+                                  {paperEditable.abstract_en}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-800">
+                        <div className="p-6">
+                          <div className="flex items-start gap-4">
+                            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center flex-shrink-0">
+                              <Hash className="w-5 h-5 text-emerald-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                关键词
+                                {(paperEditable.keywords_zh?.length > 0 || paperEditable.keywords_en?.length > 0) && (
+                                  <button
+                                    onClick={() => handlePaperArrayFieldAdd('keywords_zh')}
+                                    className="ml-auto text-emerald-400 hover:text-emerald-300 text-[11px] font-bold"
+                                  >
+                                    + 添加
+                                  </button>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {[...(paperEditable.keywords_zh || []), ...(paperEditable.keywords_en || [])].map((kw, idx) => {
+                                  const isZh = idx < (paperEditable.keywords_zh?.length || 0);
+                                  const field = isZh ? 'keywords_zh' : 'keywords_en';
+                                  const realIdx = isZh ? idx : idx - (paperEditable.keywords_zh?.length || 0);
+                                  return (
+                                    <span
+                                      key={idx}
+                                      className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 rounded-full px-3 py-1 text-xs font-medium cursor-pointer hover:bg-emerald-500/20 transition-colors"
+                                      onClick={() => setPaperEditingField(`${field}_${realIdx}`)}
+                                    >
+                                      {paperEditingField === `${field}_${realIdx}` ? (
+                                        <input
+                                          autoFocus
+                                          className="bg-transparent border-none outline-none text-emerald-300 text-xs font-medium w-24"
+                                          value={paperEditable[field][realIdx]}
+                                          onChange={(e) => handlePaperArrayFieldEdit(field, realIdx, e.target.value)}
+                                          onBlur={() => setPaperEditingField(null)}
+                                          onKeyDown={(e) => { if (e.key === 'Enter') setPaperEditingField(null); }}
+                                          onClick={(e) => e.stopPropagation()}
+                                        />
+                                      ) : (
+                                        kw
+                                      )}
+                                    </span>
+                                  );
+                                })}
+                                {(!paperEditable.keywords_zh || paperEditable.keywords_zh.length === 0) && (!paperEditable.keywords_en || paperEditable.keywords_en.length === 0) && (
+                                  <span
+                                    className="bg-slate-800/50 text-slate-500 border border-dashed border-slate-700 rounded-full px-3 py-1 text-xs cursor-pointer hover:bg-slate-800 transition-colors"
+                                    onClick={() => handlePaperArrayFieldAdd('keywords_zh')}
+                                  >
+                                    （点击添加关键词）
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="p-6">
+                          <div className="flex items-start gap-4">
+                            <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center flex-shrink-0">
+                              <Mail className="w-5 h-5 text-amber-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                通讯邮箱
+                                {paperEditable.emails?.length > 0 && (
+                                  <button
+                                    onClick={() => handlePaperArrayFieldAdd('emails')}
+                                    className="ml-auto text-amber-400 hover:text-amber-300 text-[11px] font-bold"
+                                  >
+                                    + 添加
+                                  </button>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {(paperEditable.emails && paperEditable.emails.length > 0) ? (
+                                  paperEditable.emails.map((email, idx) => (
+                                    <span
+                                      key={idx}
+                                      className="bg-amber-500/10 text-amber-300 border border-amber-500/30 rounded-lg px-3 py-1.5 text-xs font-mono cursor-pointer hover:bg-amber-500/20 transition-colors"
+                                      onClick={() => setPaperEditingField(`emails_${idx}`)}
+                                    >
+                                      {paperEditingField === `emails_${idx}` ? (
+                                        <input
+                                          autoFocus
+                                          className="bg-transparent border-none outline-none text-amber-300 text-xs font-mono w-48"
+                                          value={email}
+                                          onChange={(e) => handlePaperArrayFieldEdit('emails', idx, e.target.value)}
+                                          onBlur={() => setPaperEditingField(null)}
+                                          onKeyDown={(e) => { if (e.key === 'Enter') setPaperEditingField(null); }}
+                                          onClick={(e) => e.stopPropagation()}
+                                        />
+                                      ) : (
+                                        email
+                                      )}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span
+                                    className="bg-slate-800/50 text-slate-500 border border-dashed border-slate-700 rounded-lg px-3 py-1.5 text-xs cursor-pointer hover:bg-slate-800 transition-colors"
+                                    onClick={() => handlePaperArrayFieldAdd('emails')}
+                                  >
+                                    （点击添加邮箱）
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-800">
+                        <div className="p-6 group">
+                          <div className="flex items-start gap-4">
+                            <div className="w-10 h-10 rounded-xl bg-cyan-500/15 flex items-center justify-center flex-shrink-0">
+                              <BookMarked className="w-5 h-5 text-cyan-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                                投稿期刊
+                              </div>
+                              {paperEditingField === 'journal' ? (
+                                <input
+                                  autoFocus
+                                  className="w-full bg-slate-950 border border-cyan-500/50 rounded-xl px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-cyan-500/50"
+                                  value={paperEditable.journal || ""}
+                                  onChange={(e) => handlePaperFieldEdit('journal', e.target.value)}
+                                  onBlur={() => setPaperEditingField(null)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') setPaperEditingField(null); }}
+                                  placeholder="期刊名称"
+                                />
+                              ) : (
+                                <p
+                                  className="text-slate-300 text-sm cursor-pointer hover:bg-slate-800/50 rounded-xl px-3 py-2 -mx-3 -my-2 transition-colors truncate"
+                                  onClick={() => setPaperEditingField('journal')}
+                                  title="点击编辑期刊名"
+                                >
+                                  {paperEditable.journal || "（未识别到期刊，点击填写）"}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="p-6">
+                          <div className="flex items-start gap-4">
+                            <div className="w-10 h-10 rounded-xl bg-rose-500/15 flex items-center justify-center flex-shrink-0">
+                              <FileText className="w-5 h-5 text-rose-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                                参考文献数量
+                              </div>
+                              {paperEditingField === 'reference_count' ? (
+                                <input
+                                  autoFocus
+                                  type="number"
+                                  className="w-full bg-slate-950 border border-rose-500/50 rounded-xl px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-rose-500/50"
+                                  value={paperEditable.reference_count || 0}
+                                  onChange={(e) => handlePaperFieldEdit('reference_count', parseInt(e.target.value) || 0)}
+                                  onBlur={() => setPaperEditingField(null)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') setPaperEditingField(null); }}
+                                />
+                              ) : (
+                                <p
+                                  className="text-3xl font-black bg-gradient-to-r from-rose-400 to-fuchsia-400 bg-clip-text text-transparent cursor-pointer hover:bg-slate-800/50 rounded-xl px-3 py-1 -mx-3 -my-1 transition-colors"
+                                  onClick={() => setPaperEditingField('reference_count')}
+                                  title="点击编辑参考文献数量"
+                                >
+                                  {paperEditable.reference_count || 0} <span className="text-sm font-bold text-slate-500 bg-clip-text">篇</span>
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl">
+                    <div className="flex items-center justify-between mb-5">
+                      <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                        <Download className="w-5 h-5 text-fuchsia-400" />
+                        导出引用格式
+                      </h3>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handlePaperExport('bibtex')}
+                          className={`px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${paperExportFormat === 'bibtex' ? 'bg-fuchsia-600 text-white shadow-lg shadow-fuchsia-500/20' : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'}`}
+                        >
+                          <FileDown className="w-4 h-4" />
+                          BibTeX
+                        </button>
+                        <button
+                          onClick={() => handlePaperExport('ris')}
+                          className={`px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${paperExportFormat === 'ris' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'}`}
+                        >
+                          <FileDown className="w-4 h-4" />
+                          RIS
+                        </button>
+                      </div>
+                    </div>
+
+                    {paperExportContent ? (
+                      <div className="space-y-4">
+                        <div className="relative group">
+                          <pre className="bg-slate-950 border border-slate-800 rounded-2xl p-5 text-sm text-slate-300 overflow-x-auto font-mono leading-relaxed max-h-96 overflow-y-auto">
+                            <code>{paperExportContent}</code>
+                          </pre>
+                          <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={handlePaperCopyExport}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold flex items-center gap-1.5 border border-slate-700"
+                            >
+                              <CopyIcon className="w-3.5 h-3.5" />
+                              复制
+                            </button>
+                            <button
+                              onClick={handlePaperDownloadExport}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold flex items-center gap-1.5 border border-slate-700"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              下载
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-500 flex items-center gap-2">
+                          <Info className="w-3.5 h-3.5" />
+                          {paperExportFormat === 'bibtex'
+                            ? 'BibTeX 格式可用于 LaTeX、Overleaf、Zotero、Mendeley 等工具。'
+                            : 'RIS 格式可用于 EndNote、NoteExpress、Zotero 等文献管理软件。'}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="bg-slate-950/50 border border-dashed border-slate-800 rounded-2xl p-10 text-center">
+                        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-slate-800/60 flex items-center justify-center">
+                          <Download className="w-7 h-7 text-slate-600" />
+                        </div>
+                        <p className="text-slate-500 text-sm">选择上方 BibTeX 或 RIS 按钮生成引用格式</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {!paperLoading && !paperEditable && (
+                <div className="bg-slate-900/50 border border-dashed border-slate-800 rounded-3xl p-16 text-center">
+                  <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-gradient-to-br from-fuchsia-500/10 to-indigo-500/10 flex items-center justify-center border border-slate-800">
+                    <IdCard className="w-10 h-10 text-fuchsia-400/70" />
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-400 mb-3">上传 PDF 论文，自动提取元数据</h3>
+                  <p className="text-sm text-slate-600 max-w-md mx-auto leading-relaxed">
+                    支持双栏排版、中英文双摘要等格式。提取后可直接编辑修正，
+                    一键导出 BibTeX 或 RIS 格式用于文献管理。
+                  </p>
+                  <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto">
+                    {[
+                      { icon: FileText, label: "标题识别", desc: "首页大字号启发式" },
+                      { icon: Users, label: "作者解析", desc: "位置与格式规则" },
+                      { icon: Quote, label: "摘要提取", desc: "中英文双摘要" },
+                      { icon: FileDown, label: "格式导出", desc: "BibTeX / RIS" },
+                    ].map((item, i) => (
+                      <div key={i} className="p-4 rounded-2xl bg-slate-900/50 border border-slate-800/50">
+                        <item.icon className="w-5 h-5 text-fuchsia-400/80 mx-auto mb-2" />
+                        <p className="text-xs font-bold text-slate-400">{item.label}</p>
+                        <p className="text-[10px] text-slate-600 mt-0.5">{item.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
