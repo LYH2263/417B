@@ -60,6 +60,27 @@ def _lazy_import(name):
             except ImportError:
                 from style_analyzer import analyze_writing_style
         return analyze_writing_style
+    if name == "internal_plagiarism":
+        try:
+            from app.internal_plagiarism import (
+                detect_internal_plagiarism,
+                generate_dedup_suggestion,
+                get_whitelist_info
+            )
+        except ImportError:
+            try:
+                from .internal_plagiarism import (
+                    detect_internal_plagiarism,
+                    generate_dedup_suggestion,
+                    get_whitelist_info
+                )
+            except ImportError:
+                from internal_plagiarism import (
+                    detect_internal_plagiarism,
+                    generate_dedup_suggestion,
+                    get_whitelist_info
+                )
+        return detect_internal_plagiarism, generate_dedup_suggestion, get_whitelist_info
 
 app = FastAPI(title="Academic AIGC Helper API")
 
@@ -86,6 +107,20 @@ class ContinuationPayload(BaseModel):
 class StyleAnalysisPayload(BaseModel):
     text: str
     journal_level: str = "sci_q2"
+
+from typing import List, Optional
+
+class InternalPlagiarismPayload(BaseModel):
+    text: str
+    threshold: float = 0.8
+    window_size: int = 50
+    custom_whitelist: Optional[List[str]] = None
+    enabled_categories: Optional[List[str]] = None
+
+class DedupSuggestionPayload(BaseModel):
+    text: str
+    group: dict
+    sentences: List[dict]
 
 @app.post("/api/rewrite")
 async def rewrite(payload: RewritePayload):
@@ -544,6 +579,50 @@ async def websocket_collab(websocket: WebSocket, room_id: str, user_id: str):
             "type": "user_leave",
             "user_id": user_id
         })
+
+
+MAX_PLAGIARISM_LENGTH = 50000
+
+@app.post("/api/internal-plagiarism/detect")
+async def internal_plagiarism_detect(payload: InternalPlagiarismPayload):
+    if not payload.text or not payload.text.strip():
+        raise HTTPException(status_code=400, detail="No text provided")
+    if len(payload.text.strip()) > MAX_PLAGIARISM_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Text exceeds maximum length of {MAX_PLAGIARISM_LENGTH} characters. Current length: {len(payload.text.strip())}"
+        )
+    if not (0.0 < payload.threshold <= 1.0):
+        raise HTTPException(status_code=400, detail="Threshold must be between 0 and 1")
+    if payload.window_size < 2 or payload.window_size > 500:
+        raise HTTPException(status_code=400, detail="Window size must be between 2 and 500")
+
+    detect_internal_plagiarism, _, _ = _lazy_import("internal_plagiarism")
+    result = detect_internal_plagiarism(
+        text=payload.text,
+        threshold=payload.threshold,
+        window_size=payload.window_size,
+        custom_whitelist=payload.custom_whitelist,
+        enabled_categories=payload.enabled_categories
+    )
+    return result
+
+
+@app.post("/api/internal-plagiarism/suggest")
+async def internal_plagiarism_suggest(payload: DedupSuggestionPayload):
+    if not payload.group or not payload.sentences:
+        raise HTTPException(status_code=400, detail="Missing group or sentences data")
+
+    _, generate_dedup_suggestion, _ = _lazy_import("internal_plagiarism")
+    result = generate_dedup_suggestion(payload.sentences, payload.group)
+    return result
+
+
+@app.get("/api/internal-plagiarism/whitelist")
+async def internal_plagiarism_whitelist():
+    _, _, get_whitelist = _lazy_import("internal_plagiarism")
+    return get_whitelist()
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -4,7 +4,8 @@ import {
   CheckCircle, FileDown, Layers, Wand2, ArrowRightLeft, ListEnd, BarChart3,
   Check, RotateCcw, PenLine, Loader2, Copy, ThumbsUp, Feather, Lightbulb,
   ChevronDown, FileSearch, Highlighter, AlignJustify, BookOpen,
-  Gauge, Target, AlertTriangle, Info, TrendingUp, Award, Type, Hash, Users
+  Gauge, Target, AlertTriangle, Info, TrendingUp, Award, Type, Hash, Users,
+  Copy as CopyIcon, X, Eye, GitCompare, Settings2, Shuffle
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -76,6 +77,33 @@ function App() {
   const [activeStyleHighlight, setActiveStyleHighlight] = useState(null);
   const styleTextRef = useRef(null);
 
+  const [plagText, setPlagText] = useState("");
+  const [plagThreshold, setPlagThreshold] = useState(0.8);
+  const [plagWindowSize, setPlagWindowSize] = useState(50);
+  const [plagLoading, setPlagLoading] = useState(false);
+  const [plagResult, setPlagResult] = useState(null);
+  const [plagActiveGroup, setPlagActiveGroup] = useState(null);
+  const [plagSuggestions, setPlagSuggestions] = useState({});
+  const [plagSuggestLoading, setPlagSuggestLoading] = useState({});
+  const [plagEnabledCategories, setPlagEnabledCategories] = useState(["methodology", "math_formulas"]);
+  const [plagCustomWhitelist, setPlagCustomWhitelist] = useState("");
+  const [plagShowSettings, setPlagShowSettings] = useState(false);
+  const plagTextViewRef = useRef(null);
+  const MAX_PLAG_LENGTH = 50000;
+
+  const PLAG_COLORS = [
+    { bg: "bg-rose-500/25", border: "border-rose-500", text: "text-rose-300", ring: "ring-rose-500" },
+    { bg: "bg-amber-500/25", border: "border-amber-500", text: "text-amber-300", ring: "ring-amber-500" },
+    { bg: "bg-emerald-500/25", border: "border-emerald-500", text: "text-emerald-300", ring: "ring-emerald-500" },
+    { bg: "bg-sky-500/25", border: "border-sky-500", text: "text-sky-300", ring: "ring-sky-500" },
+    { bg: "bg-violet-500/25", border: "border-violet-500", text: "text-violet-300", ring: "ring-violet-500" },
+    { bg: "bg-fuchsia-500/25", border: "border-fuchsia-500", text: "text-fuchsia-300", ring: "ring-fuchsia-500" },
+    { bg: "bg-orange-500/25", border: "border-orange-500", text: "text-orange-300", ring: "ring-orange-500" },
+    { bg: "bg-teal-500/25", border: "border-teal-500", text: "text-teal-300", ring: "ring-teal-500" },
+  ];
+
+  const getGroupColor = (groupIndex) => PLAG_COLORS[groupIndex % PLAG_COLORS.length];
+
   const scrollToInput = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -93,6 +121,11 @@ function App() {
     setStyleResult(null);
     setStyleText("");
     setActiveStyleHighlight(null);
+    setPlagResult(null);
+    setPlagText("");
+    setPlagSuggestions({});
+    setPlagSuggestLoading({});
+    setPlagActiveGroup(null);
     scrollToInput();
   };
 
@@ -299,6 +332,210 @@ function App() {
         }
       }
     }, 100);
+  };
+
+  const handlePlagDetect = async () => {
+    if (!plagText.trim()) return;
+    if (plagText.trim().length > MAX_PLAG_LENGTH) {
+      alert(`输入文本超出字数限制（${MAX_PLAG_LENGTH}字），当前 ${plagText.trim().length} 字。请精简后重试。`);
+      return;
+    }
+    if (quota <= 0) {
+      alert("今日额度已用完，请明天再试或升级账户。");
+      return;
+    }
+    setPlagLoading(true);
+    setPlagResult(null);
+    setPlagSuggestions({});
+    setPlagSuggestLoading({});
+    setPlagActiveGroup(null);
+    try {
+      const customList = plagCustomWhitelist
+        .split(/[,，\n]/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+      const response = await axios.post(`${API_BASE}/internal-plagiarism/detect`, {
+        text: plagText,
+        threshold: plagThreshold,
+        window_size: plagWindowSize,
+        custom_whitelist: customList.length > 0 ? customList : null,
+        enabled_categories: plagEnabledCategories
+      });
+      setPlagResult(response.data);
+      decreaseQuota();
+      setTimeout(() => document.getElementById('plag-results-section')?.scrollIntoView({ behavior: 'smooth' }), 300);
+    } catch (err) {
+      alert("内部查重检测失败: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setPlagLoading(false);
+    }
+  };
+
+  const handlePlagFileUpload = async (e) => {
+    const selectedFile = e.target.files[0];
+    if (!selectedFile) return;
+    if (quota <= 0) {
+      alert("今日额度已用完，请明天再试或升级账户。");
+      return;
+    }
+    setPlagLoading(true);
+    setPlagResult(null);
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    try {
+      const response = await axios.post(`${API_BASE}/detect-file`, formData);
+      if (response.data.text) setPlagText(response.data.text);
+      decreaseQuota();
+      setTimeout(() => document.getElementById('plag-input-section')?.scrollIntoView({ behavior: 'smooth' }), 300);
+    } catch (err) {
+      alert("文件上传失败: " + err.message);
+    } finally {
+      setPlagLoading(false);
+    }
+  };
+
+  const handleGenerateDedupSuggestion = async (group) => {
+    if (quota <= 0) {
+      alert("今日额度已用完，请明天再试或升级账户。");
+      return;
+    }
+    const gid = group.group_id;
+    if (plagSuggestLoading[gid]) return;
+    setPlagSuggestLoading(prev => ({ ...prev, [gid]: true }));
+    try {
+      const response = await axios.post(`${API_BASE}/internal-plagiarism/suggest`, {
+        text: plagText,
+        group: group,
+        sentences: plagResult.sentences
+      });
+      setPlagSuggestions(prev => ({ ...prev, [gid]: response.data }));
+      decreaseQuota();
+    } catch (err) {
+      alert("去重建议生成失败: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setPlagSuggestLoading(prev => ({ ...prev, [gid]: false }));
+    }
+  };
+
+  const handleApplyDedupSuggestion = (groupId, sentenceIndex, suggestedText) => {
+    if (!plagResult?.sentences) return;
+    const sent = plagResult.sentences.find(s => s.index === sentenceIndex);
+    if (!sent) return;
+
+    const before = plagText.substring(0, sent.start);
+    const after = plagText.substring(sent.end);
+    let newText = before + suggestedText + after;
+    const offset = suggestedText.length - (sent.end - sent.start);
+
+    setPlagText(newText);
+
+    const newSentences = plagResult.sentences.map(s => {
+      if (s.index === sentenceIndex) {
+        return { ...s, text: suggestedText, end: s.start + suggestedText.length };
+      } else if (s.start > sent.start) {
+        return { ...s, start: s.start + offset, end: s.end + offset };
+      }
+      return s;
+    });
+
+    setPlagResult(prev => ({ ...prev, sentences: newSentences }));
+
+    if (plagSuggestions[groupId]) {
+      const newSuggs = plagSuggestions[groupId].suggestions.map(s => {
+        if (s.sentence_index === sentenceIndex) {
+          return { ...s, applied: true };
+        } else if (s.start > sent.start) {
+          return { ...s, start: s.start + offset, end: s.end + offset };
+        }
+        return s;
+      });
+      setPlagSuggestions(prev => ({
+        ...prev,
+        [groupId]: { ...prev[groupId], suggestions: newSuggs }
+      }));
+    }
+
+    setToastMsg("改写已应用到文本");
+  };
+
+  const scrollToSentencePosition = (sentenceIndex) => {
+    if (!plagTextViewRef.current) return;
+    setPlagActiveGroup(null);
+    setTimeout(() => {
+      const marks = plagTextViewRef.current?.querySelectorAll('mark[data-sentence-index]');
+      if (marks) {
+        for (let m of marks) {
+          if (parseInt(m.dataset.sentenceIndex) === sentenceIndex) {
+            m.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setPlagActiveGroup(parseInt(m.dataset.groupId));
+            break;
+          }
+        }
+      }
+    }, 50);
+  };
+
+  const renderPlagHighlightedText = (text, sentences, groups, activeGroup) => {
+    if (!sentences || sentences.length === 0) {
+      return <span>{text}</span>;
+    }
+
+    const sentenceToGroup = {};
+    groups.forEach((g) => {
+      g.sentence_indices.forEach(idx => {
+        sentenceToGroup[idx] = g.group_id;
+      });
+    });
+
+    const relevant = sentences.filter(s => sentenceToGroup[s.index] !== undefined);
+    if (relevant.length === 0) {
+      return <span className="whitespace-pre-wrap">{text}</span>;
+    }
+
+    const sorted = [...relevant].sort((a, b) => a.start - b.start);
+    const segments = [];
+    let lastEnd = 0;
+
+    sorted.forEach((sent, idx) => {
+      if (sent.start > lastEnd) {
+        segments.push({ type: 'normal', text: text.slice(lastEnd, sent.start) });
+      }
+      const groupId = sentenceToGroup[sent.index];
+      const color = getGroupColor(groupId);
+      const isActive = activeGroup === groupId;
+      segments.push({
+        type: 'highlight',
+        text: sent.text,
+        sentenceIndex: sent.index,
+        groupId,
+        color,
+        isActive,
+        idx
+      });
+      lastEnd = sent.end;
+    });
+
+    if (lastEnd < text.length) {
+      segments.push({ type: 'normal', text: text.slice(lastEnd) });
+    }
+
+    return segments.map((seg, i) => {
+      if (seg.type === 'highlight') {
+        return (
+          <mark
+            key={i}
+            data-sentence-index={seg.sentenceIndex}
+            data-group-id={seg.groupId}
+            className={`${seg.color.bg} ${seg.color.text} border-b-2 ${seg.color.border} cursor-pointer rounded px-0.5 transition-all ${seg.isActive ? 'ring-2 ring-offset-2 ring-offset-slate-950 ' + seg.color.ring + ' scale-[1.02]' : ''}`}
+            title={`重复组 #${seg.groupId + 1} · 句子 #${seg.sentenceIndex + 1}`}
+            onClick={() => setPlagActiveGroup(seg.isActive ? null : seg.groupId)}
+          >
+            {seg.text}
+          </mark>
+        );
+      }
+      return <span key={i} className="whitespace-pre-wrap">{seg.text}</span>;
+    });
   };
 
   const ScoreGauge = ({ score, label, color, size = 120 }) => {
@@ -673,6 +910,13 @@ function App() {
             >
               <Gauge className="w-4 h-4" />
               风格诊断
+            </button>
+            <button
+              onClick={() => setActiveTab("self_plagiarism")}
+              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${activeTab === "self_plagiarism" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20" : "text-slate-500 hover:text-slate-300"}`}
+            >
+              <GitCompare className="w-4 h-4" />
+              内部查重
             </button>
             <button
               onClick={() => setActiveTab("collab")}
@@ -1687,6 +1931,477 @@ function App() {
                     <h3 className="text-slate-400 font-bold mb-2">粘贴论文文本，一键诊断写作风格</h3>
                     <p className="text-sm text-slate-600 max-w-md mx-auto">
                       系统将从句子长度、词汇丰富度、被动语态、逻辑连接词、段落结构五个维度进行分析，对比 SCI 期刊标准，生成带原文定位的改进建议。
+                    </p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === "self_plagiarism" && (
+            <motion.div
+              key="self_plagiarism"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.2 }}
+            >
+              <div className="space-y-6">
+                <div id="plag-input-section" className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden">
+                  <div className="absolute inset-0 bg-gradient-to-br from-rose-500/5 to-fuchsia-500/5 pointer-events-none"></div>
+
+                  <div className="relative">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <GitCompare className="w-5 h-5 text-rose-400" />
+                        <h2 className="text-lg font-bold text-white">内部查重工作台</h2>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-xs text-slate-500">
+                          当前字数: <span className={plagText.length > MAX_PLAG_LENGTH ? "text-red-400 font-bold" : plagText.length > MAX_PLAG_LENGTH * 0.9 ? "text-amber-400" : "text-slate-300"}>{plagText.length}</span> / {MAX_PLAG_LENGTH}
+                        </div>
+                        <button
+                          onClick={() => setPlagShowSettings(!plagShowSettings)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${plagShowSettings ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'}`}
+                        >
+                          <Settings2 className="w-3.5 h-3.5" />
+                          参数设置
+                        </button>
+                      </div>
+                    </div>
+
+                    <AnimatePresence>
+                      {plagShowSettings && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.2 }}
+                          className="overflow-hidden mb-4"
+                        >
+                          <div className="p-5 bg-slate-950/60 border border-slate-800 rounded-2xl space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                <label className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-2 block">
+                                  相似度阈值: <span className="text-rose-400">{(plagThreshold * 100).toFixed(0)}%</span>
+                                </label>
+                                <input
+                                  type="range"
+                                  min="0.5"
+                                  max="1.0"
+                                  step="0.05"
+                                  value={plagThreshold}
+                                  onChange={(e) => setPlagThreshold(parseFloat(e.target.value))}
+                                  className="w-full accent-rose-500"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                  <span>宽松 50%</span>
+                                  <span>默认 80%</span>
+                                  <span>严格 100%</span>
+                                </div>
+                              </div>
+                              <div>
+                                <label className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-2 block">
+                                  滑动窗口大小: <span className="text-rose-400">{plagWindowSize} 句</span>
+                                </label>
+                                <input
+                                  type="range"
+                                  min="10"
+                                  max="200"
+                                  step="10"
+                                  value={plagWindowSize}
+                                  onChange={(e) => setPlagWindowSize(parseInt(e.target.value))}
+                                  className="w-full accent-rose-500"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+                                  <span>10句</span>
+                                  <span>50句</span>
+                                  <span>200句</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-2 block">
+                                白名单分类（合理重复豁免）
+                              </label>
+                              <div className="flex flex-wrap gap-2">
+                                {[
+                                  { key: "methodology", label: "方法论固定表述" },
+                                  { key: "math_formulas", label: "数学公式说明" }
+                                ].map(cat => {
+                                  const active = plagEnabledCategories.includes(cat.key);
+                                  return (
+                                    <button
+                                      key={cat.key}
+                                      onClick={() => {
+                                        if (active) {
+                                          setPlagEnabledCategories(prev => prev.filter(k => k !== cat.key));
+                                        } else {
+                                          setPlagEnabledCategories(prev => [...prev, cat.key]);
+                                        }
+                                      }}
+                                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${active ? 'bg-rose-500/20 text-rose-300 border-rose-500/50' : 'bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300'}`}
+                                    >
+                                      {active ? <Check className="w-3 h-3 inline mr-1" /> : null}
+                                      {cat.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-2 block">
+                                自定义白名单短语（逗号或换行分隔）
+                              </label>
+                              <textarea
+                                value={plagCustomWhitelist}
+                                onChange={(e) => setPlagCustomWhitelist(e.target.value)}
+                                className="w-full bg-slate-900/80 border border-slate-800 rounded-xl p-3 text-xs leading-relaxed text-slate-300 focus:ring-2 focus:ring-rose-500 focus:border-transparent outline-none min-h-[60px] resize-y"
+                                placeholder="如：实验数据表明，综上所述，如图所示...（这些短语将不计入重复）"
+                              ></textarea>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    <div className="mb-4 flex gap-2">
+                      <button className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-medium border border-slate-700">文本模式</button>
+                      <div className="relative group">
+                        <button
+                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${plagLoading ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
+                          disabled={plagLoading}
+                        >
+                          {plagLoading ? (
+                            <>
+                              <RefreshCcw className="w-4 h-4 animate-spin" />
+                              上传中...
+                            </>
+                          ) : (
+                            <>
+                              <Upload className="w-4 h-4" />
+                              上传文件
+                            </>
+                          )}
+                        </button>
+                        <input
+                          type="file"
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          onChange={handlePlagFileUpload}
+                          accept=".pdf,.docx,.txt"
+                          disabled={plagLoading}
+                        />
+                      </div>
+                    </div>
+
+                    <textarea
+                      className="w-full bg-slate-950/80 border border-slate-800 rounded-2xl p-5 text-slate-300 focus:ring-2 focus:ring-rose-500 focus:border-transparent outline-none min-h-[280px] transition-all text-sm leading-relaxed resize-y"
+                      placeholder="在此粘贴论文全文。系统将逐句比对，使用编辑距离（Levenshtein）+ TF-IDF 语义相似度双重检测，找出论文内部的自抄袭与重复表述，并给出AI改写建议。"
+                      value={plagText}
+                      onChange={(e) => setPlagText(e.target.value)}
+                    ></textarea>
+
+                    <div className="flex items-center justify-between mt-4">
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <Shuffle className="w-4 h-4" />
+                        <span>基于 Levenshtein 编辑距离 + TF-IDF 余弦相似度 · 并查集自动聚类重复组</span>
+                      </div>
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => {
+                            setPlagText("");
+                            setPlagResult(null);
+                            setPlagSuggestions({});
+                            setPlagSuggestLoading({});
+                            setPlagActiveGroup(null);
+                          }}
+                          className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl text-sm font-bold transition-all border border-slate-700"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          清空
+                        </button>
+                        <button
+                          onClick={handlePlagDetect}
+                          disabled={plagLoading || !plagText.trim() || plagText.trim().length > MAX_PLAG_LENGTH}
+                          className="flex items-center gap-2 px-7 py-2.5 bg-gradient-to-r from-rose-600 to-fuchsia-600 hover:from-rose-500 hover:to-fuchsia-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-sm font-bold transition-all shadow-xl shadow-rose-500/20"
+                        >
+                          {plagLoading ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              检测中...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-4 h-4" />
+                              开始内部查重
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {plagResult && (
+                  <motion.div
+                    id="plag-results-section"
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="space-y-6"
+                  >
+                    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 overflow-hidden relative">
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-6">
+                        <div>
+                          <h2 className="text-2xl font-bold text-white mb-2 flex items-center gap-2">
+                            <GitCompare className="w-6 h-6 text-rose-400" />
+                            内部查重报告
+                          </h2>
+                          <p className="text-slate-400 text-sm">
+                            共检测 <span className="text-white font-bold">{plagResult.statistics.total_sentences}</span> 句
+                            ，发现 <span className="text-rose-400 font-bold">{plagResult.statistics.total_groups}</span> 个重复组
+                            ，涉及 <span className="text-amber-400 font-bold">{plagResult.statistics.sentences_involved}</span> 句
+                            &nbsp;·&nbsp; 阈值 {(plagThreshold * 100).toFixed(0)}% · 窗口 {plagWindowSize} 句
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3">
+                          <div className="text-center px-4 py-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                            <p className="text-[10px] text-slate-500 uppercase font-bold">重复组</p>
+                            <p className="text-2xl font-black text-rose-400">{plagResult.statistics.total_groups}</p>
+                          </div>
+                          <div className="text-center px-4 py-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                            <p className="text-[10px] text-slate-500 uppercase font-bold">相似句对</p>
+                            <p className="text-2xl font-black text-amber-400">{plagResult.statistics.total_pairs}</p>
+                          </div>
+                          <div className="text-center px-4 py-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                            <p className="text-[10px] text-slate-500 uppercase font-bold">覆盖率</p>
+                            <p className="text-2xl font-black text-fuchsia-400">
+                              {plagResult.statistics.total_sentences > 0
+                                ? Math.round((plagResult.statistics.sentences_involved / plagResult.statistics.total_sentences) * 100)
+                                : 0}%
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {plagResult.groups.length > 0 && (
+                        <div className="mb-4">
+                          <p className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">颜色图例：相同颜色为同一重复组</p>
+                          <div className="flex flex-wrap gap-2">
+                            {plagResult.groups.map((g, idx) => {
+                              const color = getGroupColor(idx);
+                              return (
+                                <button
+                                  key={g.group_id}
+                                  onClick={() => {
+                                    setPlagActiveGroup(plagActiveGroup === g.group_id ? null : g.group_id);
+                                    if (plagActiveGroup !== g.group_id && g.sentence_indices.length > 0) {
+                                      scrollToSentencePosition(g.sentence_indices[0]);
+                                    }
+                                  }}
+                                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${plagActiveGroup === g.group_id ? color.bg + ' ' + color.text + ' ' + color.border : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-300'}`}
+                                >
+                                  <span className={`inline-block w-3 h-3 rounded ${color.bg} border ${color.border}`}></span>
+                                  组 #{idx + 1} · {g.sentence_indices.length}句 · {Math.round(g.avg_similarity * 100)}%
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                      <div className="lg:col-span-7 space-y-6">
+                        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6">
+                          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                            <Eye className="w-4 h-4 text-rose-400" />
+                            原文视图 · 点击高亮查看所属重复组
+                          </h3>
+                          <div
+                            ref={plagTextViewRef}
+                            className="p-5 bg-slate-950/70 border border-slate-800 rounded-2xl max-h-[600px] overflow-y-auto"
+                          >
+                            <p className="text-sm leading-loose text-slate-300">
+                              {plagResult.groups.length === 0 ? (
+                                <span className="text-slate-400">
+                                  🎉 未检测到内部重复内容，您的论文原创性良好！
+                                </span>
+                              ) : (
+                                renderPlagHighlightedText(plagText, plagResult.sentences, plagResult.groups, plagActiveGroup)
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="lg:col-span-5">
+                        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sticky top-24">
+                          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                            <AlertTriangle className="w-4 h-4 text-amber-400" />
+                            重复组详情 · {plagResult.groups.length} 组
+                          </h3>
+
+                          {plagResult.groups.length === 0 ? (
+                            <div className="p-8 text-center bg-slate-950/50 border border-slate-800 rounded-2xl">
+                              <CheckCircle className="w-10 h-10 text-emerald-500 mx-auto mb-3" />
+                              <p className="text-emerald-400 font-bold">原创性良好！</p>
+                              <p className="text-sm text-slate-500 mt-1">未发现明显的内部重复与自我抄袭。</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-4 max-h-[750px] overflow-y-auto pr-2">
+                              {plagResult.groups.map((group, gIdx) => {
+                                const color = getGroupColor(gIdx);
+                                const suggestions = plagSuggestions[group.group_id];
+                                const suggestLoading = plagSuggestLoading[group.group_id];
+                                const isActive = plagActiveGroup === group.group_id;
+                                return (
+                                  <motion.div
+                                    key={group.group_id}
+                                    initial={{ opacity: 0, x: 10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: gIdx * 0.04 }}
+                                    className={`rounded-2xl border-2 transition-all overflow-hidden ${isActive ? color.border + ' shadow-lg' : 'border-slate-800'}`}
+                                  >
+                                    <div
+                                      className={`px-4 py-3 cursor-pointer transition-colors ${color.bg}`}
+                                      onClick={() => setPlagActiveGroup(isActive ? null : group.group_id)}
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                          <span className={`inline-flex w-7 h-7 rounded-lg items-center justify-center text-xs font-black ${color.text} bg-slate-900/50`}>
+                                            #{gIdx + 1}
+                                          </span>
+                                          <div>
+                                            <p className={`text-sm font-bold ${color.text}`}>重复组 #{gIdx + 1}</p>
+                                            <p className="text-[10px] text-slate-500">
+                                              {group.sentence_indices.length} 句 · 平均相似度 {Math.round(group.avg_similarity * 100)}%
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <ChevronDown
+                                          className={`w-4 h-4 text-slate-400 transition-transform ${isActive ? 'rotate-180' : ''}`}
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <AnimatePresence>
+                                      {isActive && (
+                                        <motion.div
+                                          initial={{ height: 0, opacity: 0 }}
+                                          animate={{ height: "auto", opacity: 1 }}
+                                          exit={{ height: 0, opacity: 0 }}
+                                          transition={{ duration: 0.2 }}
+                                          className="overflow-hidden"
+                                        >
+                                          <div className="p-4 bg-slate-950/50 space-y-3">
+                                            <div>
+                                              <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-2">重复句子</p>
+                                              <div className="space-y-2">
+                                                {group.sentence_indices.map(sIdx => {
+                                                  const sent = plagResult.sentences.find(s => s.index === sIdx);
+                                                  if (!sent) return null;
+                                                  const suggestion = suggestions?.suggestions.find(s => s.sentence_index === sIdx);
+                                                  return (
+                                                    <div key={sIdx} className="p-3 bg-slate-900/60 rounded-xl border border-slate-800">
+                                                      <div className="flex items-start justify-between gap-2 mb-1">
+                                                        <button
+                                                          onClick={() => scrollToSentencePosition(sIdx)}
+                                                          className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors flex items-center gap-1"
+                                                        >
+                                                          <Eye className="w-3 h-3" /> 句 #{sIdx + 1}
+                                                        </button>
+                                                      </div>
+                                                      <p className="text-xs text-slate-300 leading-relaxed line-clamp-3">{sent.text}</p>
+                                                      {suggestion && !suggestion.applied && (
+                                                        <div className="mt-3 pt-3 border-t border-slate-800">
+                                                          <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                                                            <Sparkles className="w-3 h-3" /> AI 改写建议
+                                                          </p>
+                                                          <p className="text-xs text-emerald-200 leading-relaxed bg-emerald-500/10 p-2 rounded-lg border border-emerald-500/30">
+                                                            {suggestion.suggested}
+                                                          </p>
+                                                          <div className="flex gap-2 mt-2">
+                                                            <button
+                                                              onClick={() => handleApplyDedupSuggestion(group.group_id, sIdx, suggestion.suggested)}
+                                                              className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-500/20"
+                                                            >
+                                                              <Check className="w-3 h-3" /> 应用改写
+                                                            </button>
+                                                            <button
+                                                              onClick={() => navigator.clipboard.writeText(suggestion.suggested)}
+                                                              className="flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700"
+                                                            >
+                                                              <CopyIcon className="w-3 h-3" />
+                                                            </button>
+                                                          </div>
+                                                        </div>
+                                                      )}
+                                                      {suggestion?.applied && (
+                                                        <div className="mt-2 text-[10px] text-emerald-400 flex items-center gap-1">
+                                                          <CheckCircle className="w-3 h-3" /> 已应用改写
+                                                        </div>
+                                                      )}
+                                                    </div>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+
+                                            {!suggestions && (
+                                              <button
+                                                onClick={() => handleGenerateDedupSuggestion(group)}
+                                                disabled={suggestLoading}
+                                                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white shadow-lg shadow-emerald-500/20"
+                                              >
+                                                {suggestLoading ? (
+                                                  <>
+                                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                    生成改写建议中...
+                                                  </>
+                                                ) : (
+                                                  <>
+                                                    <Sparkles className="w-3.5 h-3.5" />
+                                                    AI 生成去重改写
+                                                  </>
+                                                )}
+                                              </button>
+                                            )}
+
+                                            {suggestions && (
+                                              <button
+                                                onClick={() => handleGenerateDedupSuggestion(group)}
+                                                disabled={suggestLoading}
+                                                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[10px] font-bold transition-all bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700"
+                                              >
+                                                <RefreshCcw className={`w-3 h-3 ${suggestLoading ? 'animate-spin' : ''}`} />
+                                                重新生成建议
+                                              </button>
+                                            )}
+                                          </div>
+                                        </motion.div>
+                                      )}
+                                    </AnimatePresence>
+                                  </motion.div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {!plagResult && !plagLoading && (
+                  <div className="bg-slate-900/50 border border-dashed border-slate-800 rounded-3xl p-12 text-center">
+                    <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-slate-800 flex items-center justify-center">
+                      <GitCompare className="w-8 h-8 text-slate-600" />
+                    </div>
+                    <h3 className="text-slate-400 font-bold mb-2">粘贴论文全文，一键检测内部重复</h3>
+                    <p className="text-sm text-slate-600 max-w-md mx-auto">
+                      系统将采用编辑距离 + TF-IDF 语义相似度双重算法，用滑动窗口逐句比对，自动聚类重复组，并生成 AI 去重改写建议。
                     </p>
                   </div>
                 )}
