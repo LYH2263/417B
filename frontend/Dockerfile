@@ -1,17 +1,13 @@
-# Frontend Dockerfile - Node.js
-FROM node:18-slim
+FROM node:20-slim
 
 WORKDIR /app
 
-COPY package*.json ./
+COPY package.json ./
 RUN npm install
+RUN npm rebuild
 
 COPY . .
 
-# 如果是开发环境，使用 dev
-# CMD ["npm", "run", "dev", "--", "--host"]
-
-# 如果是生产环境，先 build 再用 preview
 RUN npm run build
-EXPOSE 4173
-CMD ["npm", "run", "preview", "--", "--host", "--port", "4173"]
+EXPOSE 5417
+CMD ["npm", "run", "preview", "--", "--host", "--port", "5417"]

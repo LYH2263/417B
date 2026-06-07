@@ -6,7 +6,7 @@ import {
   ChevronDown, FileSearch, Highlighter, AlignJustify, BookOpen,
   Gauge, Target, AlertTriangle, Info, TrendingUp, Award, Type, Hash, Users,
   Copy as CopyIcon, X, Eye, GitCompare, Settings2, Shuffle,
-  History, IdCard, Mail, BookMarked, Quote, Pencil, Download, FileUp
+  History, Contact, Mail, BookMarked, Quote, Pencil, Download, FileUp
 } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -1318,7 +1318,7 @@ function App() {
               onClick={() => setActiveTab("paper_info")}
               className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${activeTab === "paper_info" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20" : "text-slate-500 hover:text-slate-300"}`}
             >
-              <IdCard className="w-4 h-4" />
+              <Contact className="w-4 h-4" />
               论文信息卡
             </button>
           </div>
@@ -2863,7 +2863,7 @@ function App() {
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5">
                     <div>
                       <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                        <IdCard className="w-5 h-5 text-fuchsia-400" />
+                        <Contact className="w-5 h-5 text-fuchsia-400" />
                         论文信息提取
                       </h2>
                       <p className="text-sm text-slate-400 mt-1">
@@ -3329,7 +3329,7 @@ function App() {
               {!paperLoading && !paperEditable && (
                 <div className="bg-slate-900/50 border border-dashed border-slate-800 rounded-3xl p-16 text-center">
                   <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-gradient-to-br from-fuchsia-500/10 to-indigo-500/10 flex items-center justify-center border border-slate-800">
-                    <IdCard className="w-10 h-10 text-fuchsia-400/70" />
+                    <Contact className="w-10 h-10 text-fuchsia-400/70" />
                   </div>
                   <h3 className="text-xl font-bold text-slate-400 mb-3">上传 PDF 论文，自动提取元数据</h3>
                   <p className="text-sm text-slate-600 max-w-md mx-auto leading-relaxed">
