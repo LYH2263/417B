@@ -8,7 +8,7 @@ import {
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const API_BASE = "http://localhost:8417/api";
+const API_BASE = "/api";
 
 const OPERATION_CONFIG = {
   detect: {

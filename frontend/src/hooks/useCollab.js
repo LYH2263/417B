@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-const WS_BASE = (typeof window !== 'undefined' && window.location.hostname === 'localhost')
-  ? 'ws://localhost:8417/ws/collab'
-  : `ws://${typeof window !== 'undefined' ? window.location.host : 'localhost:8417'}/ws/collab`;
+const getWsProtocol = () => {
+  if (typeof window === 'undefined') return 'ws:';
+  return window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+};
 
-const API_BASE = (typeof window !== 'undefined' && window.location.hostname === 'localhost')
-  ? 'http://localhost:8417/api'
-  : `/api`;
+const WS_BASE = (typeof window !== 'undefined')
+  ? `${getWsProtocol()}//${window.location.host}/ws/collab`
+  : 'ws://localhost:8417/ws/collab';
+
+const API_BASE = `/api`;
 
 function generateUserId() {
   const stored = localStorage.getItem('collab_user_id');

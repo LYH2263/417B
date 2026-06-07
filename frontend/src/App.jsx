@@ -17,7 +17,7 @@ import CollabEditor from './components/CollabEditor';
 import VersionPanel from './components/VersionPanel';
 import NotificationCenter from './components/NotificationCenter';
 
-const API_BASE = "http://localhost:8417/api";
+const API_BASE = "/api";
 
 let _lastQuotaWarningTime = 0;
 
