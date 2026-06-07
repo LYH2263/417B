@@ -1,27 +1,49 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 import asyncio
 import json
+import time
 
 try:
     from app.parser import extract_text
     from app.rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
     from app.summarizer import summarize_paper
     from app.collab import room_manager
+    from app.api_keys import (
+        create_api_key, list_api_keys, revoke_api_key,
+        get_api_key_by_hash, update_key_last_used, log_api_usage,
+        check_rate_limit, update_rate_limit, get_usage_stats,
+        get_dashboard_stats, verify_admin_token,
+        CreateApiKeyRequest, UpdateRateLimitRequest, VerifyAdminRequest, ADMIN_TOKEN
+    )
 except ImportError:
     try:
         from .parser import extract_text
         from .rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
         from .summarizer import summarize_paper
         from .collab import room_manager
+        from .api_keys import (
+            create_api_key, list_api_keys, revoke_api_key,
+            get_api_key_by_hash, update_key_last_used, log_api_usage,
+            check_rate_limit, update_rate_limit, get_usage_stats,
+            get_dashboard_stats, verify_admin_token,
+            CreateApiKeyRequest, UpdateRateLimitRequest, VerifyAdminRequest, ADMIN_TOKEN
+        )
     except ImportError:
         from parser import extract_text
         from rating import RatingSubmit, submit_rating, get_statistics, generate_suggestions
         from summarizer import summarize_paper
         from collab import room_manager
+        from api_keys import (
+            create_api_key, list_api_keys, revoke_api_key,
+            get_api_key_by_hash, update_key_last_used, log_api_usage,
+            check_rate_limit, update_rate_limit, get_usage_stats,
+            get_dashboard_stats, verify_admin_token,
+            CreateApiKeyRequest, UpdateRateLimitRequest, VerifyAdminRequest, ADMIN_TOKEN
+        )
 
 def _lazy_import(name):
     if name == "detect_ai_content":
@@ -622,6 +644,162 @@ async def internal_plagiarism_suggest(payload: DedupSuggestionPayload):
 async def internal_plagiarism_whitelist():
     _, _, get_whitelist = _lazy_import("internal_plagiarism")
     return get_whitelist()
+
+
+PUBLIC_PATHS = {"/", "/docs", "/openapi.json", "/redoc", "/health"}
+ADMIN_API_PATHS = {"/api/admin"}
+COLLAB_WS_PATH = "/ws/collab"
+
+
+def _is_api_path(path: str) -> bool:
+    return path.startswith("/api/") and not any(path.startswith(p) for p in ADMIN_API_PATHS)
+
+
+def _is_admin_path(path: str) -> bool:
+    return any(path.startswith(p) for p in ADMIN_API_PATHS)
+
+
+@app.middleware("http")
+async def api_gateway_middleware(request: Request, call_next):
+    path = request.url.path
+
+    if path in PUBLIC_PATHS or not _is_api_path(path):
+        response = await call_next(request)
+        return response
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        response = await call_next(request)
+        return response
+
+    start_time = time.time()
+    api_key_data = None
+    status_code = 500
+    error_msg = None
+
+    try:
+        raw_key = auth_header[7:].strip()
+        import hashlib
+        key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+        api_key_data = get_api_key_by_hash(key_hash)
+        if not api_key_data:
+            status_code = 401
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        if not api_key_data.get("is_valid"):
+            status_code = 403
+            if api_key_data.get("status") == "revoked":
+                raise HTTPException(status_code=403, detail="API key has been revoked")
+            raise HTTPException(status_code=403, detail="API key has expired")
+
+        rpm = api_key_data.get("requests_per_minute", 60)
+        rate_result = check_rate_limit(api_key_data["id"], rpm)
+        if not rate_result["allowed"]:
+            status_code = 429
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded. Limit: {rate_result['limit']} requests/minute"
+            )
+
+        update_key_last_used(api_key_data["id"])
+
+        response = await call_next(request)
+        status_code = response.status_code
+
+        response.headers["X-RateLimit-Limit"] = str(rate_result["limit"])
+        response.headers["X-RateLimit-Remaining"] = str(int(rate_result["remaining_tokens"]))
+
+        return response
+
+    except HTTPException as he:
+        status_code = he.status_code
+        error_msg = he.detail
+        return JSONResponse(
+            status_code=he.status_code,
+            content={"detail": he.detail}
+        )
+    except Exception as e:
+        status_code = 500
+        error_msg = str(e)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"}
+        )
+    finally:
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        if api_key_data:
+            try:
+                log_api_usage(
+                    api_key_id=api_key_data["id"],
+                    endpoint=path,
+                    method=request.method,
+                    status_code=status_code,
+                    response_time_ms=elapsed_ms,
+                    error_message=error_msg
+                )
+            except Exception:
+                pass
+
+
+@app.post("/api/admin/verify")
+async def admin_verify(payload: VerifyAdminRequest):
+    if not verify_admin_token(payload.admin_token):
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+    return {"valid": True}
+
+
+def _require_admin(x_admin_token: str = Header(None)):
+    if not x_admin_token or not verify_admin_token(x_admin_token):
+        raise HTTPException(status_code=401, detail="Admin authorization required")
+    return True
+
+
+@app.post("/api/admin/keys")
+async def admin_create_key(req: CreateApiKeyRequest, _: bool = Depends(_require_admin)):
+    return create_api_key(req)
+
+
+@app.get("/api/admin/keys")
+async def admin_list_keys(_: bool = Depends(_require_admin)):
+    return {"keys": list_api_keys()}
+
+
+@app.post("/api/admin/keys/{key_id}/revoke")
+async def admin_revoke_key(key_id: int, _: bool = Depends(_require_admin)):
+    ok = revoke_api_key(key_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="API key not found or already revoked")
+    return {"success": True}
+
+
+@app.get("/api/admin/stats/usage")
+async def admin_usage_stats(
+    api_key_id: Optional[int] = None,
+    period: str = "day",
+    _: bool = Depends(_require_admin)
+):
+    if period not in {"day", "week", "month"}:
+        raise HTTPException(status_code=400, detail="Invalid period. Use day, week, or month")
+    return get_usage_stats(api_key_id, period)
+
+
+@app.get("/api/admin/stats/dashboard")
+async def admin_dashboard(_: bool = Depends(_require_admin)):
+    return get_dashboard_stats()
+
+
+@app.put("/api/admin/rate-limit")
+async def admin_update_rate_limit(req: UpdateRateLimitRequest, _: bool = Depends(_require_admin)):
+    ok = update_rate_limit(req.api_key_id, req.requests_per_minute)
+    if not ok:
+        raise HTTPException(status_code=404, detail="API key not found")
+    return {"success": True, "api_key_id": req.api_key_id, "requests_per_minute": req.requests_per_minute}
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "timestamp": time.time()}
 
 
 if __name__ == "__main__":
