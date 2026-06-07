@@ -9,7 +9,7 @@ function SuggestionBanner({ externalSuggestions, onApply, refreshTrigger }) {
 
   const fetchSuggestions = async () => {
     try {
-      const response = await axios.get('/api/ratings/suggestions');
+      const response = await axios.get('http://localhost:8417/api/ratings/suggestions');
       if (response.data && response.data.suggestions) {
         setSuggestions(response.data.suggestions);
       }

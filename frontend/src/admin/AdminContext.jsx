@@ -3,7 +3,9 @@ import axios from 'axios';
 
 const AdminContext = createContext(null);
 
-const API_BASE = "/api";
+const API_BASE = (typeof window !== 'undefined' && window.location.hostname === 'localhost')
+  ? "http://localhost:8417/api"
+  : "/api";
 const STORAGE_KEY = "paperwise_admin_token";
 
 export function AdminProvider({ children }) {

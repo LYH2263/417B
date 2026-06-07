@@ -7,7 +7,9 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 
-const API_BASE = "/api";
+const API_BASE = (typeof window !== 'undefined' && window.location.hostname === 'localhost')
+  ? "http://localhost:8417/api"
+  : "/api";
 
 const NOTIFICATION_ICONS = {
   system: Megaphone,

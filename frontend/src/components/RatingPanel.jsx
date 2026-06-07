@@ -55,7 +55,7 @@ function RatingPanel({ rewriteResult, rewriteLevel, originalText, onSuggestions 
     setSubmitting(true);
     setError('');
     try {
-      const response = await axios.post('/api/ratings', {
+      const response = await axios.post('http://localhost:8417/api/ratings', {
         rewrite_level: rewriteLevel,
         semantic_fidelity: ratings.semantic_fidelity,
         academic_norm: ratings.academic_norm,

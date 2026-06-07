@@ -58,7 +58,7 @@ function RatingStatistics({ refreshTrigger }) {
     setLoading(true);
     setError('');
     try {
-      const response = await axios.get('/api/ratings/statistics');
+      const response = await axios.get('http://localhost:8417/api/ratings/statistics');
       setStats(response.data);
     } catch (err) {
       setError('加载统计数据失败');
